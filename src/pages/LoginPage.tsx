@@ -1,31 +1,131 @@
-import { FormEvent, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Eye, EyeOff, Info, LogIn } from 'lucide-react';
+import { FormEvent, useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, LogIn } from 'lucide-react';
 import { BUSINESS_CONFIG } from '../config/businessConfig';
+import { useAuth } from '../context/AuthContext';
+import {
+  getRememberSessionPreference,
+  isSupabaseConfigured,
+  setRememberSessionPreference,
+  supabase,
+} from '../lib/supabase';
+
+interface LocationState {
+  from?: string;
+  notice?: string;
+}
 
 export function LoginPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const state = (location.state as LocationState | null) ?? null;
+
+  const { user, loading: authLoading, authNotice, authError, clearAuthNotices } = useAuth();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberSession, setRememberSession] = useState<boolean>(getRememberSessionPreference);
   const [showPassword, setShowPassword] = useState(false);
+
+  const [submitting, setSubmitting] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [needsEmailConfirmation, setNeedsEmailConfirmation] = useState(false);
   const [error, setError] = useState('');
-  const [submittedNotice, setSubmittedNotice] = useState(false);
+  const [infoMessage, setInfoMessage] = useState<string | null>(state?.notice ?? null);
 
-  const handleSubmit = (event: FormEvent) => {
+  useEffect(() => {
+    if (!authLoading && user) {
+      const target = state?.from && state.from !== '/login' ? state.from : '/dashboard';
+      navigate(target, { replace: true });
+    }
+  }, [authLoading, user, state, navigate]);
+
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    clearAuthNotices();
+    setInfoMessage(null);
+    setNeedsEmailConfirmation(false);
 
-    if (!emailPattern.test(email.trim())) {
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!emailPattern.test(trimmedEmail)) {
       setError('Please enter a valid email address.');
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    if (!password) {
+      setError('Please enter your password.');
+      return;
+    }
+
+    if (!isSupabaseConfigured || !supabase) {
+      setError(
+        'Supabase is not configured yet. Please set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
+      );
       return;
     }
 
     setError('');
-    setSubmittedNotice(true);
+    setSubmitting(true);
+
+    try {
+      // Apply storage preference before signing in
+      setRememberSessionPreference(rememberSession);
+
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: trimmedEmail,
+        password,
+      });
+
+      if (signInError) {
+        const lowerMsg = signInError.message.toLowerCase();
+        if (lowerMsg.includes('email not confirmed')) {
+          setNeedsEmailConfirmation(true);
+          setError('Your email address has not been verified yet. Please check your inbox or resend the link.');
+        } else {
+          setError(signInError.message);
+        }
+        return;
+      }
+
+      if (data.session) {
+        const target = state?.from && state.from !== '/login' ? state.from : '/dashboard';
+        navigate(target, { replace: true });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to sign in. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  const handleResendConfirmation = async () => {
+    if (!supabase || !email.trim()) return;
+    setResending(true);
+    setError('');
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim().toLowerCase(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (resendError) {
+        setError(resendError.message);
+      } else {
+        setInfoMessage('Verification email sent. Please open the link in your inbox before signing in.');
+        setNeedsEmailConfirmation(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not resend verification email.');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  const displayedNotice = infoMessage || authNotice;
+  const displayedGlobalError = authError;
 
   return (
     <div className="flex min-h-[calc(100vh-14rem)] items-center justify-center bg-slate-50/70 px-4 py-12 sm:px-6">
@@ -34,20 +134,21 @@ export function LoginPage() {
           <p className="text-xs font-semibold tracking-wide text-[#1D4ED8]">{BUSINESS_CONFIG.name}</p>
           <h1 className="mt-1 font-display text-2xl font-bold text-[#0B1F3A]">Customer Login</h1>
           <p className="mt-1.5 text-sm text-slate-600">
-            Sign in to view your upcoming self-drive trips and license verification status.
+            Sign in to view your customer profile and account dashboard.
           </p>
         </div>
 
-        {submittedNotice && (
-          <div className="mt-5 flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-xs leading-relaxed text-[#0B1F3A]">
-            <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-            <div>
-              <p className="font-semibold">Phase 1 Frontend Preview</p>
-              <p className="mt-0.5 text-slate-600">
-                Your form input is valid. Live customer authentication will be connected to your Supabase project in the
-                next phase.
-              </p>
-            </div>
+        {displayedNotice && (
+          <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 text-xs leading-relaxed text-[#166534]">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{displayedNotice}</span>
+          </div>
+        )}
+
+        {displayedGlobalError && !error && (
+          <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50/80 p-3.5 text-xs leading-relaxed text-red-800">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{displayedGlobalError}</span>
           </div>
         )}
 
@@ -72,9 +173,17 @@ export function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="login-password" className="block text-xs font-semibold text-slate-700">
-              Password
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="login-password" className="block text-xs font-semibold text-slate-700">
+                Password
+              </label>
+              <Link
+                to="/forgot-password"
+                className="text-xs font-semibold text-[#1D4ED8] transition-colors hover:text-[#0B1F3A]"
+              >
+                Forgot password?
+              </Link>
+            </div>
             <div className="relative mt-1.5">
               <input
                 id="login-password"
@@ -100,18 +209,46 @@ export function LoginPage() {
             </div>
           </div>
 
+          <div className="flex items-center gap-2.5">
+            <input
+              id="remember-session"
+              type="checkbox"
+              checked={rememberSession}
+              onChange={(e) => setRememberSession(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
+            />
+            <label htmlFor="remember-session" className="text-xs font-medium text-slate-700">
+              Remember session on this browser
+            </label>
+          </div>
+
           {error && (
-            <p role="alert" className="text-xs font-medium text-red-700">
-              {error}
-            </p>
+            <div role="alert" className="space-y-2">
+              <p className="text-xs font-medium text-red-700">{error}</p>
+              {needsEmailConfirmation && (
+                <button
+                  type="button"
+                  disabled={resending}
+                  onClick={handleResendConfirmation}
+                  className="text-xs font-semibold text-[#1D4ED8] underline underline-offset-2 hover:text-[#0B1F3A] disabled:opacity-60"
+                >
+                  {resending ? 'Sending verification link...' : 'Resend verification email'}
+                </button>
+              )}
+            </div>
           )}
 
           <button
             type="submit"
-            className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8]"
+            disabled={submitting}
+            className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <LogIn className="h-4 w-4" aria-hidden="true" />
-            <span>Sign In</span>
+            {submitting ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <LogIn className="h-4 w-4" aria-hidden="true" />
+            )}
+            <span>{submitting ? 'Signing In...' : 'Sign In'}</span>
           </button>
         </form>
 

@@ -1,7 +1,7 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { CheckCircle2, Clock, MapPin, Send } from 'lucide-react';
 import { BUSINESS_CONFIG } from '../config/businessConfig';
-import { VEHICLES } from '../data/vehicles';
+import { useVehicles } from '../hooks/useVehicles';
 import { WhatsAppButton } from '../components/WhatsAppButton';
 import { getTodayInputDate } from '../utils/rentalUtils';
 
@@ -14,15 +14,23 @@ interface InquiryFormState {
 }
 
 export function ContactPage() {
+  const { vehicles } = useVehicles();
+
   const [form, setForm] = useState<InquiryFormState>({
     name: '',
     phone: '',
-    preferredCar: VEHICLES[0]?.name || 'Maruti Suzuki Swift',
+    preferredCar: '',
     pickupDate: getTodayInputDate(1),
     message: '',
   });
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (!form.preferredCar && vehicles.length > 0) {
+      setForm((prev) => ({ ...prev, preferredCar: vehicles[0].name }));
+    }
+  }, [vehicles, form.preferredCar]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -45,7 +53,8 @@ export function ContactPage() {
     setSubmitted(true);
   };
 
-  const whatsappSummary = `Hello ${BUSINESS_CONFIG.name}, my name is ${form.name || 'a customer'}. I would like to inquire about ${form.preferredCar} on ${form.pickupDate}. ${form.message}`;
+  const selectedCarLabel = form.preferredCar || 'a self-drive car';
+  const whatsappSummary = `Hello ${BUSINESS_CONFIG.name}, my name is ${form.name || 'a customer'}. I would like to inquire about ${selectedCarLabel} on ${form.pickupDate}. ${form.message}`;
 
   return (
     <div className="bg-slate-50/60">
@@ -62,7 +71,7 @@ export function ContactPage() {
         </div>
 
         <div className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-12">
-          {/* Left Info Column — no invented street/phone details */}
+          {/* Left Info Column */}
           <div className="space-y-6 lg:col-span-5">
             <div className="rounded-2xl border border-slate-200 bg-white p-6">
               <h2 className="font-display text-lg font-bold text-[#0B1F3A]">Service Location</h2>
@@ -88,7 +97,7 @@ export function ContactPage() {
             <div className="rounded-2xl border border-slate-200 bg-white p-6">
               <h2 className="font-display text-lg font-bold text-[#0B1F3A]">Direct WhatsApp Inquiry</h2>
               <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                Reach out directly on WhatsApp to confirm availability for Swift, Baleno, Hyundai i20, or SUV models.
+                Reach out directly on WhatsApp to confirm availability for our self-drive fleet in Siddipet.
               </p>
               <div className="mt-5">
                 <WhatsAppButton
@@ -117,7 +126,7 @@ export function ContactPage() {
                       <h3 className="font-display text-base font-bold text-[#0B1F3A]">Inquiry Prepared</h3>
                       <p className="mt-1 text-sm leading-relaxed text-slate-700">
                         Thank you, <span className="font-semibold">{form.name}</span>. Your inquiry for{' '}
-                        <span className="font-semibold">{form.preferredCar}</span> ({form.pickupDate}) has been
+                        <span className="font-semibold">{selectedCarLabel}</span> ({form.pickupDate}) has been
                         validated. You can forward this inquiry directly on WhatsApp or edit your details below.
                       </p>
                       <div className="mt-4 flex flex-wrap gap-3">
@@ -172,18 +181,30 @@ export function ContactPage() {
                       <label htmlFor="contact-car" className="block text-xs font-semibold text-slate-700">
                         Preferred Vehicle
                       </label>
-                      <select
-                        id="contact-car"
-                        value={form.preferredCar}
-                        onChange={(e) => setForm({ ...form, preferredCar: e.target.value })}
-                        className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-                      >
-                        {VEHICLES.map((car) => (
-                          <option key={car.id} value={car.name}>
-                            {car.name} ({car.transmission})
-                          </option>
-                        ))}
-                      </select>
+                      {vehicles.length > 0 ? (
+                        <select
+                          id="contact-car"
+                          value={form.preferredCar}
+                          onChange={(e) => setForm({ ...form, preferredCar: e.target.value })}
+                          className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+                        >
+                          {vehicles.map((car) => (
+                            <option key={car.id} value={car.name}>
+                              {car.name}
+                              {car.transmission ? ` (${car.transmission})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          id="contact-car"
+                          type="text"
+                          value={form.preferredCar}
+                          onChange={(e) => setForm({ ...form, preferredCar: e.target.value })}
+                          placeholder="e.g. Swift, Baleno, i20"
+                          className="mt-1.5 h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+                        />
+                      )}
                     </div>
 
                     <div>

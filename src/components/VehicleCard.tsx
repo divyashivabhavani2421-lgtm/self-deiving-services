@@ -10,13 +10,14 @@ interface VehicleCardProps {
 }
 
 export function VehicleCard({ vehicle, searchQuery = '' }: VehicleCardProps) {
-  const detailUrl = `/cars/${vehicle.slug}${searchQuery}`;
+  const detailUrl = `/cars/${encodeURIComponent(vehicle.slug || vehicle.id)}${searchQuery}`;
+  const primaryImage = vehicle.image || vehicle.images[0] || '';
 
   return (
     <article className="group flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
       <Link to={detailUrl} className="block overflow-hidden bg-slate-100">
         <VehicleImage
-          src={vehicle.image}
+          src={primaryImage}
           alt={`${vehicle.name} self drive car in Siddipet`}
           className="transition-transform duration-300 group-hover:scale-[1.03]"
         />
@@ -24,7 +25,19 @@ export function VehicleCard({ vehicle, searchQuery = '' }: VehicleCardProps) {
 
       <div className="flex flex-1 flex-col p-5 sm:p-6">
         <div className="text-xs font-medium text-slate-500">
-          {vehicle.category} <span aria-hidden="true">·</span> {vehicle.year}
+          {vehicle.category}
+          {vehicle.year ? (
+            <>
+              {' '}
+              <span aria-hidden="true">·</span> {vehicle.year}
+            </>
+          ) : null}
+          {!vehicle.isAvailable ? (
+            <>
+              {' '}
+              <span aria-hidden="true">·</span> <span className="text-amber-700">Currently Unavailable</span>
+            </>
+          ) : null}
         </div>
 
         <h3 className="mt-1 font-display text-lg font-bold text-[#0B1F3A]">
@@ -33,31 +46,48 @@ export function VehicleCard({ vehicle, searchQuery = '' }: VehicleCardProps) {
           </Link>
         </h3>
 
-        <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-slate-600">{vehicle.shortSummary}</p>
+        {vehicle.shortSummary ? (
+          <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-slate-600">{vehicle.shortSummary}</p>
+        ) : null}
 
         {/* Clean Specs Row */}
         <dl className="mt-4 grid grid-cols-3 gap-2 border-y border-slate-100 py-3 text-xs text-slate-700">
           <div className="flex items-center gap-1.5">
             <Fuel className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-            <dd className="truncate font-medium">{vehicle.fuelType}</dd>
+            <dd className="truncate font-medium">{vehicle.fuelType || '—'}</dd>
           </div>
           <div className="flex items-center gap-1.5">
             <Settings2 className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-            <dd className="truncate font-medium">{vehicle.transmission}</dd>
+            <dd className="truncate font-medium">{vehicle.transmission || '—'}</dd>
           </div>
           <div className="flex items-center gap-1.5">
             <Users className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-            <dd className="truncate font-medium tabular-nums">{vehicle.seats} Seats</dd>
+            <dd className="truncate font-medium tabular-nums">
+              {vehicle.seats !== null ? `${vehicle.seats} Seats` : '—'}
+            </dd>
           </div>
         </dl>
 
         {/* Price + View Details */}
         <div className="mt-auto flex items-center justify-between gap-4 pt-5">
           <div>
-            <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
-              {formatINR(vehicle.dailyPrice)}
-            </span>
-            <span className="text-xs font-medium text-slate-500"> / day</span>
+            {vehicle.dailyPrice !== null ? (
+              <div>
+                <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
+                  {formatINR(vehicle.dailyPrice)}
+                </span>
+                <span className="text-xs font-medium text-slate-500"> / day</span>
+              </div>
+            ) : vehicle.hourlyPrice !== null ? (
+              <div>
+                <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
+                  {formatINR(vehicle.hourlyPrice)}
+                </span>
+                <span className="text-xs font-medium text-slate-500"> / hr</span>
+              </div>
+            ) : (
+              <span className="text-sm font-medium text-slate-600">Contact for rate</span>
+            )}
           </div>
 
           <Link

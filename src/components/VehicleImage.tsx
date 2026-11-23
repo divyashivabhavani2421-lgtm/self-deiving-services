@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CarFront } from 'lucide-react';
 
 interface VehicleImageProps {
@@ -15,6 +15,10 @@ export function VehicleImage({
   aspectClassName = 'aspect-[4/3]',
 }: VehicleImageProps) {
   const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
 
   if (hasError || !src) {
     return (

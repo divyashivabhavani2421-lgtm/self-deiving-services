@@ -1,11 +1,15 @@
 import { Link } from 'react-router-dom';
 import { MapPin } from 'lucide-react';
 import { BUSINESS_CONFIG } from '../config/businessConfig';
-import { FEATURED_VEHICLES } from '../data/vehicles';
+import { useAuth } from '../context/AuthContext';
+import { useVehicles } from '../hooks/useVehicles';
 import { WhatsAppButton } from './WhatsAppButton';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
+  const { user, signOut } = useAuth();
+  const { vehicles } = useVehicles();
+  const footerFleet = vehicles.slice(0, 3);
 
   return (
     <footer className="border-t border-slate-800 bg-[#0B1F3A] text-slate-300">
@@ -53,20 +57,23 @@ export function Footer() {
             </ul>
           </div>
 
-          {/* Popular Fleet */}
+          {/* Fleet Links */}
           <div>
-            <h2 className="font-display text-sm font-semibold text-white">Popular Fleet</h2>
+            <h2 className="font-display text-sm font-semibold text-white">Self Drive Fleet</h2>
             <ul className="mt-4 space-y-2.5 text-sm">
-              {FEATURED_VEHICLES.map((car) => (
+              {footerFleet.map((car) => (
                 <li key={car.id}>
-                  <Link to={`/cars/${car.slug}`} className="transition-colors hover:text-white">
+                  <Link
+                    to={`/cars/${encodeURIComponent(car.slug || car.id)}`}
+                    className="transition-colors hover:text-white"
+                  >
                     {car.name}
                   </Link>
                 </li>
               ))}
               <li>
                 <Link to="/cars" className="text-blue-300 transition-colors hover:text-white">
-                  View Full Fleet
+                  Browse Available Cars
                 </Link>
               </li>
             </ul>
@@ -76,16 +83,37 @@ export function Footer() {
           <div className="space-y-4">
             <h2 className="font-display text-sm font-semibold text-white">Customer Access</h2>
             <ul className="space-y-2.5 text-sm">
-              <li>
-                <Link to="/login" className="transition-colors hover:text-white">
-                  Customer Login
-                </Link>
-              </li>
-              <li>
-                <Link to="/register" className="transition-colors hover:text-white">
-                  Create Account
-                </Link>
-              </li>
+              {user ? (
+                <>
+                  <li>
+                    <Link to="/dashboard" className="transition-colors hover:text-white">
+                      Customer Dashboard
+                    </Link>
+                  </li>
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => void signOut()}
+                      className="transition-colors hover:text-white"
+                    >
+                      Sign Out
+                    </button>
+                  </li>
+                </>
+              ) : (
+                <>
+                  <li>
+                    <Link to="/login" className="transition-colors hover:text-white">
+                      Customer Login
+                    </Link>
+                  </li>
+                  <li>
+                    <Link to="/register" className="transition-colors hover:text-white">
+                      Create Account
+                    </Link>
+                  </li>
+                </>
+              )}
             </ul>
             <div className="pt-2">
               <WhatsAppButton

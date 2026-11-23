@@ -1,9 +1,16 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, MapPin, ShieldCheck } from 'lucide-react';
-import { FEATURED_VEHICLES, HERO_IMAGE } from '../data/vehicles';
+import { HERO_IMAGE } from '../data/vehicles';
+import { useVehicles } from '../hooks/useVehicles';
 import { VehicleCard } from '../components/VehicleCard';
 import { VehicleImage } from '../components/VehicleImage';
 import { VehicleSearchBar } from '../components/VehicleSearchBar';
+import {
+  VehicleEmptyState,
+  VehicleErrorState,
+  VehicleGridSkeleton,
+} from '../components/VehicleListStates';
 
 const STEPS = [
   {
@@ -27,6 +34,16 @@ const STEPS = [
 ];
 
 export function HomePage() {
+  const { vehicles, loading, error, isConfigMissing, reload } = useVehicles();
+
+  const featuredVehicles = useMemo(() => {
+    const explicitlyFeatured = vehicles.filter((car) => car.featured);
+    if (explicitlyFeatured.length > 0) {
+      return explicitlyFeatured.slice(0, 3);
+    }
+    return vehicles.slice(0, 3);
+  }, [vehicles]);
+
   return (
     <div>
       {/* Hero Split Section */}
@@ -90,7 +107,7 @@ export function HomePage() {
         </div>
       </section>
 
-      {/* Featured Vehicles Section */}
+      {/* Featured Vehicles Section (Live from Supabase) */}
       <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 sm:py-18 lg:px-8">
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
@@ -108,10 +125,25 @@ export function HomePage() {
           </Link>
         </div>
 
-        <div className="mt-8 grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">
-          {FEATURED_VEHICLES.map((vehicle) => (
-            <VehicleCard key={vehicle.id} vehicle={vehicle} />
-          ))}
+        <div className="mt-8">
+          {loading ? (
+            <VehicleGridSkeleton count={3} />
+          ) : error ? (
+            <VehicleErrorState error={error} isConfigMissing={isConfigMissing} onRetry={reload} />
+          ) : featuredVehicles.length === 0 ? (
+            <VehicleEmptyState
+              title="No vehicles listed yet"
+              description="No vehicle records were found in the Supabase vehicles table. Add rows or enable public SELECT access via RLS to display your fleet here."
+              actionLabel="Refresh Fleet"
+              onAction={reload}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">
+              {featuredVehicles.map((vehicle) => (
+                <VehicleCard key={vehicle.id} vehicle={vehicle} />
+              ))}
+            </div>
+          )}
         </div>
       </section>
 

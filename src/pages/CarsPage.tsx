@@ -1,18 +1,22 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { RotateCcw, Search } from 'lucide-react';
-import { VEHICLES } from '../data/vehicles';
-import { FuelType, RentalSearchParams, TransmissionType } from '../types/vehicle';
+import { useVehicles } from '../hooks/useVehicles';
+import { RentalSearchParams } from '../types/vehicle';
 import { buildSearchQueryString, calculateRentalDays } from '../utils/rentalUtils';
 import { VehicleCard } from '../components/VehicleCard';
 import { VehicleSearchBar } from '../components/VehicleSearchBar';
+import {
+  VehicleEmptyState,
+  VehicleErrorState,
+  VehicleGridSkeleton,
+} from '../components/VehicleListStates';
 
-type FuelFilter = 'All' | FuelType;
-type TransmissionFilter = 'All' | TransmissionType;
 type SortOrder = 'featured' | 'price-asc' | 'price-desc';
 
 export function CarsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { vehicles, loading, error, isConfigMissing, reload } = useVehicles();
 
   const initialSchedule: Partial<RentalSearchParams> = {
     pickupDate: searchParams.get('pickupDate') || undefined,
@@ -22,12 +26,26 @@ export function CarsPage() {
   };
 
   const [query, setQuery] = useState('');
-  const [fuelFilter, setFuelFilter] = useState<FuelFilter>('All');
-  const [transmissionFilter, setTransmissionFilter] = useState<TransmissionFilter>('All');
+  const [fuelFilter, setFuelFilter] = useState<string>('All');
+  const [transmissionFilter, setTransmissionFilter] = useState<string>('All');
   const [sortOrder, setSortOrder] = useState<SortOrder>('featured');
 
   const currentSearchQuery = buildSearchQueryString(initialSchedule);
   const rentalDays = calculateRentalDays(initialSchedule);
+
+  const fuelOptions = useMemo(() => {
+    const distinct = Array.from(
+      new Set(vehicles.map((v) => v.fuelType.trim()).filter(Boolean))
+    );
+    return ['All', ...distinct];
+  }, [vehicles]);
+
+  const transmissionOptions = useMemo(() => {
+    const distinct = Array.from(
+      new Set(vehicles.map((v) => v.transmission.trim()).filter(Boolean))
+    );
+    return ['All', ...distinct];
+  }, [vehicles]);
 
   const handleScheduleSearch = (nextParams: RentalSearchParams) => {
     setSearchParams({
@@ -41,13 +59,21 @@ export function CarsPage() {
   const filteredVehicles = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    const list = VEHICLES.filter((car) => {
-      if (fuelFilter !== 'All' && car.fuelType !== fuelFilter) return false;
-      if (transmissionFilter !== 'All' && car.transmission !== transmissionFilter) return false;
+    const list = vehicles.filter((car) => {
+      if (fuelFilter !== 'All' && car.fuelType.toLowerCase() !== fuelFilter.toLowerCase()) {
+        return false;
+      }
+      if (
+        transmissionFilter !== 'All' &&
+        car.transmission.toLowerCase() !== transmissionFilter.toLowerCase()
+      ) {
+        return false;
+      }
       if (
         normalizedQuery &&
         !car.name.toLowerCase().includes(normalizedQuery) &&
-        !car.category.toLowerCase().includes(normalizedQuery)
+        !car.category.toLowerCase().includes(normalizedQuery) &&
+        !car.brand.toLowerCase().includes(normalizedQuery)
       ) {
         return false;
       }
@@ -55,13 +81,15 @@ export function CarsPage() {
     });
 
     if (sortOrder === 'price-asc') {
-      return [...list].sort((a, b) => a.dailyPrice - b.dailyPrice);
+      return [...list].sort(
+        (a, b) => (a.dailyPrice ?? Number.MAX_SAFE_INTEGER) - (b.dailyPrice ?? Number.MAX_SAFE_INTEGER)
+      );
     }
     if (sortOrder === 'price-desc') {
-      return [...list].sort((a, b) => b.dailyPrice - a.dailyPrice);
+      return [...list].sort((a, b) => (b.dailyPrice ?? -1) - (a.dailyPrice ?? -1));
     }
     return list;
-  }, [query, fuelFilter, transmissionFilter, sortOrder]);
+  }, [vehicles, query, fuelFilter, transmissionFilter, sortOrder]);
 
   const resetFilters = () => {
     setQuery('');
@@ -108,55 +136,56 @@ export function CarsPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search Swift, Baleno, i20..."
+              placeholder="Search by car name or category..."
               aria-label="Search cars by model name"
               className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-[#0B1F3A] placeholder:text-slate-400 focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
             />
           </div>
 
-          {/* Interactive Filters */}
+          {/* Interactive Filters derived from actual DB rows */}
           <div className="flex flex-wrap items-center gap-3">
-            {/* Fuel Filter */}
-            <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Fuel type filter">
-              {(['All', 'Petrol', 'Diesel'] as FuelFilter[]).map((fuel) => (
-                <button
-                  key={fuel}
-                  type="button"
-                  onClick={() => setFuelFilter(fuel)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                    fuelFilter === fuel
-                      ? 'bg-white text-[#0B1F3A] shadow-sm'
-                      : 'text-slate-600 hover:text-[#0B1F3A]'
-                  }`}
-                >
-                  {fuel === 'All' ? 'All Fuel' : fuel}
-                </button>
-              ))}
-            </div>
+            {fuelOptions.length > 1 && (
+              <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Fuel type filter">
+                {fuelOptions.map((fuel) => (
+                  <button
+                    key={fuel}
+                    type="button"
+                    onClick={() => setFuelFilter(fuel)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                      fuelFilter === fuel
+                        ? 'bg-white text-[#0B1F3A] shadow-sm'
+                        : 'text-slate-600 hover:text-[#0B1F3A]'
+                    }`}
+                  >
+                    {fuel === 'All' ? 'All Fuel' : fuel}
+                  </button>
+                ))}
+              </div>
+            )}
 
-            {/* Transmission Filter */}
-            <div
-              className="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
-              role="group"
-              aria-label="Transmission filter"
-            >
-              {(['All', 'Manual', 'Automatic'] as TransmissionFilter[]).map((tx) => (
-                <button
-                  key={tx}
-                  type="button"
-                  onClick={() => setTransmissionFilter(tx)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                    transmissionFilter === tx
-                      ? 'bg-white text-[#0B1F3A] shadow-sm'
-                      : 'text-slate-600 hover:text-[#0B1F3A]'
-                  }`}
-                >
-                  {tx === 'All' ? 'All Gear' : tx}
-                </button>
-              ))}
-            </div>
+            {transmissionOptions.length > 1 && (
+              <div
+                className="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
+                role="group"
+                aria-label="Transmission filter"
+              >
+                {transmissionOptions.map((tx) => (
+                  <button
+                    key={tx}
+                    type="button"
+                    onClick={() => setTransmissionFilter(tx)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                      transmissionFilter === tx
+                        ? 'bg-white text-[#0B1F3A] shadow-sm'
+                        : 'text-slate-600 hover:text-[#0B1F3A]'
+                    }`}
+                  >
+                    {tx === 'All' ? 'All Gear' : tx}
+                  </button>
+                ))}
+              </div>
+            )}
 
-            {/* Sort */}
             <select
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as SortOrder)}
@@ -171,45 +200,60 @@ export function CarsPage() {
         </div>
 
         {/* Results Meta */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
-          <p className="tabular-nums">
-            Showing <span className="font-semibold text-[#0B1F3A]">{filteredVehicles.length}</span>{' '}
-            {filteredVehicles.length === 1 ? 'vehicle' : 'vehicles'}
-            {rentalDays !== null && (
-              <>
-                {' '}
-                <span aria-hidden="true">·</span> Selected duration:{' '}
-                <span className="font-semibold text-[#1D4ED8]">
-                  {rentalDays} {rentalDays === 1 ? 'Day' : 'Days'}
-                </span>
-              </>
-            )}
-          </p>
-        </div>
-
-        {/* Grid or Empty State */}
-        {filteredVehicles.length > 0 ? (
-          <div className="mt-6 grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">
-            {filteredVehicles.map((vehicle) => (
-              <VehicleCard key={vehicle.id} vehicle={vehicle} searchQuery={currentSearchQuery} />
-            ))}
-          </div>
-        ) : (
-          <div className="mt-8 rounded-xl border border-slate-200 bg-white px-6 py-14 text-center">
-            <h2 className="font-display text-lg font-bold text-[#0B1F3A]">No matching vehicles found</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              Try clearing your search or adjusting the fuel type and transmission filters.
+        {!loading && !error && (
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+            <p className="tabular-nums">
+              Showing <span className="font-semibold text-[#0B1F3A]">{filteredVehicles.length}</span>{' '}
+              {filteredVehicles.length === 1 ? 'vehicle' : 'vehicles'}
+              {rentalDays !== null && (
+                <>
+                  {' '}
+                  <span aria-hidden="true">·</span> Selected duration:{' '}
+                  <span className="font-semibold text-[#1D4ED8]">
+                    {rentalDays} {rentalDays === 1 ? 'Day' : 'Days'}
+                  </span>
+                </>
+              )}
             </p>
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
-            >
-              <RotateCcw className="h-4 w-4" aria-hidden="true" />
-              <span>Reset All Filters</span>
-            </button>
           </div>
         )}
+
+        {/* Loading, Error, Empty, or Grid */}
+        <div className="mt-6">
+          {loading ? (
+            <VehicleGridSkeleton count={3} />
+          ) : error ? (
+            <VehicleErrorState error={error} isConfigMissing={isConfigMissing} onRetry={reload} />
+          ) : vehicles.length === 0 ? (
+            <VehicleEmptyState
+              title="No vehicles found in the database"
+              description="Your Supabase vehicles table returned 0 accessible rows. Confirm records exist and a public read RLS policy is active."
+              actionLabel="Refresh Vehicles"
+              onAction={reload}
+            />
+          ) : filteredVehicles.length > 0 ? (
+            <div className="grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">
+              {filteredVehicles.map((vehicle) => (
+                <VehicleCard key={vehicle.id} vehicle={vehicle} searchQuery={currentSearchQuery} />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white px-6 py-14 text-center">
+              <h2 className="font-display text-lg font-bold text-[#0B1F3A]">No matching vehicles found</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Try clearing your search or adjusting the fuel type and transmission filters.
+              </p>
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+              >
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                <span>Reset All Filters</span>
+              </button>
+            </div>
+          )}
+        </div>
       </section>
     </div>
   );

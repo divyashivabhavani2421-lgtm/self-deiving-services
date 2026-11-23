@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -9,18 +9,28 @@ import {
   Gauge,
   MapPin,
   Settings2,
+  ShieldCheck,
   Users,
 } from 'lucide-react';
-import { VEHICLES } from '../data/vehicles';
+import { fetchVehicleBySlugOrId } from '../services/vehiclesService';
+import { listVehicleImages } from '../services/storageService';
+import { Vehicle } from '../types/vehicle';
 import { calculateRentalDays, formatINR, getDefaultSearchParams } from '../utils/rentalUtils';
 import { VehicleImage } from '../components/VehicleImage';
 import { WhatsAppButton } from '../components/WhatsAppButton';
+import { VehicleErrorState } from '../components/VehicleListStates';
 
 export function VehicleDetailPage() {
   const { slug } = useParams<{ slug: string }>();
   const [searchParams] = useSearchParams();
 
-  const vehicle = VEHICLES.find((item) => item.slug === slug);
+  const [vehicle, setVehicle] = useState<Vehicle | null>(null);
+  const [storageImages, setStorageImages] = useState<string[]>([]);
+  const [selectedImage, setSelectedImage] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isConfigMissing, setIsConfigMissing] = useState(false);
+
   const defaults = getDefaultSearchParams();
 
   const [pickupDate, setPickupDate] = useState(searchParams.get('pickupDate') || defaults.pickupDate);
@@ -28,12 +38,101 @@ export function VehicleDetailPage() {
   const [returnDate, setReturnDate] = useState(searchParams.get('returnDate') || defaults.returnDate);
   const [returnTime, setReturnTime] = useState(searchParams.get('returnTime') || defaults.returnTime);
 
+  const loadVehicle = async (targetSlug: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchVehicleBySlugOrId(decodeURIComponent(targetSlug), {
+        includeInactive: false,
+      });
+      setVehicle(result.vehicle);
+      setError(result.error);
+      setIsConfigMissing(result.isConfigMissing);
+
+      if (result.vehicle) {
+        const storageRes = await listVehicleImages(result.vehicle.id);
+        setStorageImages(storageRes.files.map((f) => f.publicUrl));
+      } else {
+        setStorageImages([]);
+      }
+    } catch (err) {
+      setVehicle(null);
+      setStorageImages([]);
+      setError(err instanceof Error ? err.message : 'Unable to load vehicle details.');
+      setIsConfigMissing(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (slug) {
+      void loadVehicle(slug);
+    } else {
+      setLoading(false);
+      setVehicle(null);
+    }
+  }, [slug]);
+
+  const galleryImages = useMemo(() => {
+    if (!vehicle) return [];
+    const merged: string[] = [];
+    const addUnique = (url: string) => {
+      if (url && !merged.includes(url)) merged.push(url);
+    };
+    addUnique(vehicle.image);
+    vehicle.images.forEach(addUnique);
+    storageImages.forEach(addUnique);
+    return merged;
+  }, [vehicle, storageImages]);
+
+  useEffect(() => {
+    setSelectedImage(galleryImages[0] || '');
+  }, [galleryImages]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8" aria-busy="true" aria-label="Loading vehicle details">
+        <div className="mb-6 h-4 w-48 animate-pulse rounded bg-slate-200" />
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
+          <div className="lg:col-span-7">
+            <div className="aspect-[4/3] animate-pulse rounded-2xl bg-slate-200" />
+            <div className="mt-6 h-6 w-48 animate-pulse rounded bg-slate-200" />
+            <div className="mt-3 h-20 w-full animate-pulse rounded bg-slate-100" />
+          </div>
+          <div className="lg:col-span-5">
+            <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-slate-50" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
+        <Link
+          to="/cars"
+          className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-[#1D4ED8] hover:text-[#0B1F3A]"
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          <span>Back to Available Cars</span>
+        </Link>
+        <VehicleErrorState
+          error={error}
+          isConfigMissing={isConfigMissing}
+          onRetry={() => slug && void loadVehicle(slug)}
+        />
+      </div>
+    );
+  }
+
   if (!vehicle) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-20 text-center sm:px-6">
         <h1 className="font-display text-2xl font-bold text-[#0B1F3A]">Vehicle Not Found</h1>
         <p className="mt-3 text-sm text-slate-600">
-          The requested car could not be located in our Siddipet fleet.
+          The requested car is either unavailable or not currently active in our Siddipet fleet.
         </p>
         <Link
           to="/cars"
@@ -47,9 +146,12 @@ export function VehicleDetailPage() {
   }
 
   const estimatedDays = calculateRentalDays({ pickupDate, pickupTime, returnDate, returnTime });
-  const estimatedTotal = estimatedDays ? estimatedDays * vehicle.dailyPrice : null;
+  const estimatedTotal =
+    estimatedDays !== null && vehicle.dailyPrice !== null ? estimatedDays * vehicle.dailyPrice : null;
 
-  const whatsappMessage = `Hello Siddipet Self Drive Cars, I am interested in renting the ${vehicle.name} (${vehicle.fuelType}, ${vehicle.transmission}) at ${formatINR(vehicle.dailyPrice)}/day from ${pickupDate} (${pickupTime}) to ${returnDate} (${returnTime}). Please share availability.`;
+  const rateText = vehicle.dailyPrice !== null ? ` at ${formatINR(vehicle.dailyPrice)}/day` : '';
+  const specsText = [vehicle.fuelType, vehicle.transmission].filter(Boolean).join(', ');
+  const whatsappMessage = `Hello Siddipet Self Drive Cars, I am interested in renting the ${vehicle.name}${specsText ? ` (${specsText})` : ''}${rateText} from ${pickupDate} (${pickupTime}) to ${returnDate} (${returnTime}). Please share availability.`;
 
   return (
     <div className="bg-white">
@@ -68,28 +170,56 @@ export function VehicleDetailPage() {
         </nav>
 
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
-          {/* Left Column: Image & Details */}
+          {/* Left Column: Image Gallery & Details */}
           <div className="lg:col-span-7">
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-              <VehicleImage src={vehicle.image} alt={`${vehicle.name} studio photo`} />
+              <VehicleImage src={selectedImage} alt={`${vehicle.name} photo`} />
             </div>
 
-            <div className="mt-8">
-              <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Vehicle Overview</h2>
-              <p className="mt-3 text-base leading-relaxed text-slate-600">{vehicle.description}</p>
-            </div>
-
-            <div className="mt-8 border-t border-slate-200 pt-8">
-              <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Features & Comfort</h2>
-              <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {vehicle.highlights.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2.5 text-sm text-slate-700">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                    <span>{feature}</span>
-                  </li>
+            {galleryImages.length > 1 && (
+              <div className="mt-3 grid grid-cols-4 gap-3 sm:grid-cols-5">
+                {galleryImages.map((imgUrl, idx) => (
+                  <button
+                    key={imgUrl}
+                    type="button"
+                    onClick={() => setSelectedImage(imgUrl)}
+                    aria-label={`View photo ${idx + 1} of ${vehicle.name}`}
+                    className={`overflow-hidden rounded-lg border transition-all ${
+                      selectedImage === imgUrl
+                        ? 'border-[#1D4ED8] ring-2 ring-[#1D4ED8]/30'
+                        : 'border-slate-200 opacity-80 hover:opacity-100'
+                    }`}
+                  >
+                    <VehicleImage
+                      src={imgUrl}
+                      alt={`${vehicle.name} thumbnail ${idx + 1}`}
+                      aspectClassName="aspect-[4/3]"
+                    />
+                  </button>
                 ))}
-              </ul>
-            </div>
+              </div>
+            )}
+
+            {vehicle.description ? (
+              <div className="mt-8">
+                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Vehicle Overview</h2>
+                <p className="mt-3 text-base leading-relaxed text-slate-600">{vehicle.description}</p>
+              </div>
+            ) : null}
+
+            {vehicle.highlights.length > 0 && (
+              <div className="mt-8 border-t border-slate-200 pt-8">
+                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Features & Comfort</h2>
+                <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {vehicle.highlights.map((feature) => (
+                    <li key={feature} className="flex items-start gap-2.5 text-sm text-slate-700">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="mt-8 rounded-xl border border-slate-200 bg-slate-50 p-5">
               <div className="flex items-start gap-3">
@@ -98,7 +228,7 @@ export function VehicleDetailPage() {
                   <h3 className="font-display text-base font-bold text-[#0B1F3A]">Handover Requirements</h3>
                   <p className="mt-1 text-sm leading-relaxed text-slate-600">
                     Original valid Indian Driving License and Government Photo ID (Aadhaar / Passport) are verified at
-                    pickup in Siddipet. {vehicle.pickupNotes}
+                    pickup in Siddipet.
                   </p>
                 </div>
               </div>
@@ -108,16 +238,41 @@ export function VehicleDetailPage() {
           {/* Right Column: Contiguous Specs & Inquiry Module */}
           <div className="lg:col-span-5">
             <div className="sticky top-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="text-xs font-semibold text-slate-500">
-                {vehicle.category} <span aria-hidden="true">·</span> {vehicle.year} Model
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500">
+                <span>
+                  {vehicle.category}
+                  {vehicle.year ? ` · ${vehicle.year} Model` : ''}
+                </span>
+                <span className={vehicle.isAvailable ? 'text-[#15803D]' : 'text-amber-700'}>
+                  {vehicle.isAvailable ? 'Available for Pickup' : 'Currently Unavailable'}
+                </span>
               </div>
               <h1 className="mt-1 font-display text-2xl font-bold text-[#0B1F3A] sm:text-3xl">{vehicle.name}</h1>
 
-              <div className="mt-4 flex items-baseline gap-2 border-b border-slate-100 pb-5">
-                <span className="font-display text-3xl font-extrabold text-[#0B1F3A] tabular-nums">
-                  {formatINR(vehicle.dailyPrice)}
-                </span>
-                <span className="text-sm font-medium text-slate-500">per day (24 hrs)</span>
+              <div className="mt-4 border-b border-slate-100 pb-5">
+                <div className="flex items-baseline gap-2">
+                  {vehicle.dailyPrice !== null ? (
+                    <>
+                      <span className="font-display text-3xl font-extrabold text-[#0B1F3A] tabular-nums">
+                        {formatINR(vehicle.dailyPrice)}
+                      </span>
+                      <span className="text-sm font-medium text-slate-500">per day (24 hrs)</span>
+                    </>
+                  ) : (
+                    <span className="text-base font-semibold text-slate-700">Contact for daily rate</span>
+                  )}
+                </div>
+
+                {(vehicle.hourlyPrice !== null || vehicle.securityDeposit !== null) && (
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 tabular-nums">
+                    {vehicle.hourlyPrice !== null && (
+                      <span>Hourly Rate: {formatINR(vehicle.hourlyPrice)}/hr</span>
+                    )}
+                    {vehicle.securityDeposit !== null && (
+                      <span>Refundable Deposit: {formatINR(vehicle.securityDeposit)}</span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Specifications Grid */}
@@ -126,7 +281,7 @@ export function VehicleDetailPage() {
                   <Fuel className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
                     <dt className="text-xs text-slate-500">Fuel Type</dt>
-                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.fuelType}</dd>
+                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.fuelType || '—'}</dd>
                   </div>
                 </div>
 
@@ -134,7 +289,7 @@ export function VehicleDetailPage() {
                   <Settings2 className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
                     <dt className="text-xs text-slate-500">Transmission</dt>
-                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.transmission}</dd>
+                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.transmission || '—'}</dd>
                   </div>
                 </div>
 
@@ -142,31 +297,47 @@ export function VehicleDetailPage() {
                   <Users className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
                     <dt className="text-xs text-slate-500">Seating</dt>
-                    <dd className="font-semibold text-[#0B1F3A] tabular-nums">{vehicle.seats} Seats</dd>
+                    <dd className="font-semibold text-[#0B1F3A] tabular-nums">
+                      {vehicle.seats !== null ? `${vehicle.seats} Seats` : '—'}
+                    </dd>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2.5">
-                  <Gauge className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                  <div>
-                    <dt className="text-xs text-slate-500">Fuel Economy</dt>
-                    <dd className="font-semibold text-[#0B1F3A] tabular-nums">{vehicle.mileage}</dd>
+                {vehicle.mileage && (
+                  <div className="flex items-center gap-2.5">
+                    <Gauge className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                    <div>
+                      <dt className="text-xs text-slate-500">Fuel Economy</dt>
+                      <dd className="font-semibold text-[#0B1F3A] tabular-nums">{vehicle.mileage}</dd>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div className="flex items-center gap-2.5">
-                  <Briefcase className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                  <div>
-                    <dt className="text-xs text-slate-500">Boot Space</dt>
-                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.luggageCapacity}</dd>
+                {vehicle.luggageCapacity && (
+                  <div className="flex items-center gap-2.5">
+                    <Briefcase className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                    <div>
+                      <dt className="text-xs text-slate-500">Boot Space</dt>
+                      <dd className="font-semibold text-[#0B1F3A]">{vehicle.luggageCapacity}</dd>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {vehicle.registrationNumber && (
+                  <div className="flex items-center gap-2.5">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                    <div>
+                      <dt className="text-xs text-slate-500">Registration</dt>
+                      <dd className="font-semibold text-[#0B1F3A] tabular-nums">{vehicle.registrationNumber}</dd>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2.5">
                   <MapPin className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
-                    <dt className="text-xs text-slate-500">Pickup City</dt>
-                    <dd className="font-semibold text-[#0B1F3A]">Siddipet, TS</dd>
+                    <dt className="text-xs text-slate-500">Pickup Location</dt>
+                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.pickupLocation || 'Siddipet, TS'}</dd>
                   </div>
                 </div>
               </dl>
@@ -226,13 +397,13 @@ export function VehicleDetailPage() {
                   </div>
                 </div>
 
-                {estimatedDays !== null && estimatedTotal !== null ? (
+                {estimatedDays !== null ? (
                   <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3 text-sm">
                     <span className="text-slate-600 tabular-nums">
                       Estimated ({estimatedDays} {estimatedDays === 1 ? 'Day' : 'Days'})
                     </span>
                     <span className="font-display text-lg font-bold text-[#0B1F3A] tabular-nums">
-                      {formatINR(estimatedTotal)}
+                      {estimatedTotal !== null ? formatINR(estimatedTotal) : 'Rate on inquiry'}
                     </span>
                   </div>
                 ) : (
@@ -240,7 +411,7 @@ export function VehicleDetailPage() {
                 )}
               </div>
 
-              {/* Action CTAs (WhatsApp Inquiry & Contact — no fake payment/booking) */}
+              {/* Action CTAs */}
               <div className="mt-6 flex flex-col gap-3">
                 <WhatsAppButton
                   label="Inquire Availability on WhatsApp"

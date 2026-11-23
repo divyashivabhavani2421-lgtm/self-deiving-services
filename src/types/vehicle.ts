@@ -1,26 +1,61 @@
-export type FuelType = 'Petrol' | 'Diesel';
-export type TransmissionType = 'Manual' | 'Automatic';
-export type VehicleCategory = 'Hatchback' | 'Premium Hatchback' | 'Compact SUV';
-
 export interface Vehicle {
   id: string;
   slug: string;
   name: string;
   brand: string;
-  category: VehicleCategory;
-  fuelType: FuelType;
-  transmission: TransmissionType;
-  seats: number;
-  dailyPrice: number;
-  mileage: string;
-  luggageCapacity: string;
-  year: number;
+  model: string;
+  category: string;
+  fuelType: string;
+  transmission: string;
+  seats: number | null;
+  dailyPrice: number | null;
+  hourlyPrice: number | null;
+  securityDeposit: number | null;
+  mileage?: string;
+  luggageCapacity?: string;
+  year?: number;
   featured: boolean;
+  isAvailable: boolean;
+  isActive: boolean;
   image: string;
+  images: string[];
   shortSummary: string;
   description: string;
   highlights: string[];
-  pickupNotes: string;
+  pickupLocation?: string;
+  registrationNumber?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  rawColumns?: string[];
+}
+
+export interface VehicleWriteInput {
+  name: string;
+  brand: string;
+  model: string;
+  registrationNumber: string;
+  category: string;
+  fuelType: string;
+  transmission: string;
+  seats: number | null;
+  year: number | null;
+  dailyPrice: number | null;
+  hourlyPrice: number | null;
+  securityDeposit: number | null;
+  description: string;
+  isAvailable: boolean;
+  isActive: boolean;
+  featured?: boolean;
+  image?: string;
+  images?: string[];
+}
+
+export interface VehicleStorageFile {
+  name: string;
+  path: string;
+  publicUrl: string;
+  createdAt?: string;
+  sizeBytes?: number;
 }
 
 export interface RentalSearchParams {
