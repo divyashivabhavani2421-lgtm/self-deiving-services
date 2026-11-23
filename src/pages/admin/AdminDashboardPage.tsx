@@ -5,6 +5,7 @@ import {
   CalendarCheck2,
   CarFront,
   CheckCircle2,
+  ClipboardList,
   Database,
   Edit3,
   Image as ImageIcon,
@@ -24,6 +25,7 @@ import { useVehicles } from '../../hooks/useVehicles';
 import { deleteVehicle, updateVehicle } from '../../services/vehiclesService';
 import { Vehicle } from '../../types/vehicle';
 import { formatINR } from '../../utils/rentalUtils';
+import { AdminBookingsManager } from '../../components/admin/AdminBookingsManager';
 import { VehicleForm } from '../../components/admin/VehicleForm';
 import { VehicleImagesManager } from '../../components/admin/VehicleImagesManager';
 import { VehicleImage } from '../../components/VehicleImage';
@@ -31,6 +33,7 @@ import { VehicleErrorState } from '../../components/VehicleListStates';
 
 type AdminSection =
   | 'overview'
+  | 'bookings'
   | 'vehicles'
   | 'add'
   | 'edit'
@@ -41,6 +44,7 @@ type AdminSection =
 
 const SIDEBAR_ITEMS: { id: AdminSection; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Dashboard Overview', icon: LayoutDashboard },
+  { id: 'bookings', label: 'Manage Bookings', icon: ClipboardList },
   { id: 'vehicles', label: 'Manage Vehicles', icon: CarFront },
   { id: 'add', label: 'Add Vehicle', icon: Plus },
   { id: 'images', label: 'Vehicle Images', icon: ImageIcon },
@@ -375,15 +379,24 @@ export function AdminDashboardPage() {
 
                   {/* Quick Fleet Overview Table */}
                   <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                    <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
                       <h2 className="font-display text-base font-bold text-[#0B1F3A]">Fleet Snapshot</h2>
-                      <button
-                        type="button"
-                        onClick={() => setActiveSection('vehicles')}
-                        className="text-xs font-semibold text-[#1D4ED8] hover:text-[#0B1F3A]"
-                      >
-                        Open Full Manager
-                      </button>
+                      <div className="flex items-center gap-4">
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection('bookings')}
+                          className="text-xs font-semibold text-[#1D4ED8] hover:text-[#0B1F3A]"
+                        >
+                          Manage Bookings
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection('vehicles')}
+                          className="text-xs font-semibold text-[#1D4ED8] hover:text-[#0B1F3A]"
+                        >
+                          Open Full Manager
+                        </button>
+                      </div>
                     </div>
 
                     {loading ? (
@@ -663,6 +676,9 @@ export function AdminDashboardPage() {
                   onRefreshVehicles={reload}
                 />
               )}
+
+              {/* MANAGE BOOKINGS */}
+              {activeSection === 'bookings' && <AdminBookingsManager />}
 
               {/* 6. VEHICLE AVAILABILITY */}
               {activeSection === 'availability' && (

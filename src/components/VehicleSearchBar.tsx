@@ -4,9 +4,12 @@ import { Calendar, Clock, Search } from 'lucide-react';
 import { RentalSearchParams } from '../types/vehicle';
 import {
   buildSearchQueryString,
-  calculateRentalDays,
+  calculateDurationHours,
+  formatDurationLabel,
   getDefaultSearchParams,
   getTodayInputDate,
+  MIN_RENTAL_HOURS,
+  toISTTimestampIso,
 } from '../utils/rentalUtils';
 
 interface VehicleSearchBarProps {
@@ -57,7 +60,7 @@ export function VehicleSearchBar({
   const [returnTime, setReturnTime] = useState(initialValues?.returnTime || defaults.returnTime);
   const [error, setError] = useState('');
 
-  const rentalDays = calculateRentalDays({ pickupDate, pickupTime, returnDate, returnTime });
+  const durationHours = calculateDurationHours({ pickupDate, pickupTime, returnDate, returnTime });
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -67,10 +70,16 @@ export function VehicleSearchBar({
       return;
     }
 
-    const start = new Date(`${pickupDate}T${pickupTime}`);
-    const end = new Date(`${returnDate}T${returnTime}`);
-    if (end <= start) {
+    const startIso = toISTTimestampIso(pickupDate, pickupTime);
+    const endIso = toISTTimestampIso(returnDate, returnTime);
+    if (!startIso || !endIso || new Date(endIso) <= new Date(startIso)) {
       setError('Return date and time must be after pickup date and time.');
+      return;
+    }
+
+    const hours = calculateDurationHours({ pickupDate, pickupTime, returnDate, returnTime });
+    if (hours === null || hours < MIN_RENTAL_HOURS) {
+      setError(`Minimum rental duration is ${MIN_RENTAL_HOURS} hours.`);
       return;
     }
 
@@ -96,12 +105,12 @@ export function VehicleSearchBar({
             Plan Your Self-Drive Schedule
           </h2>
           <p className="text-xs text-slate-500 sm:text-sm">
-            Pickup & Return in Siddipet, Telangana
+            Pickup &amp; Return in Siddipet, Telangana · Times in IST (Asia/Kolkata)
           </p>
         </div>
-        {rentalDays !== null && (
+        {durationHours !== null && durationHours >= MIN_RENTAL_HOURS && (
           <div className="text-xs font-medium text-[#1D4ED8] tabular-nums sm:text-sm">
-            Trip Duration: {rentalDays} {rentalDays === 1 ? 'Day' : 'Days'}
+            Trip Duration: {formatDurationLabel(durationHours)}
           </div>
         )}
       </div>
@@ -135,7 +144,7 @@ export function VehicleSearchBar({
         <div>
           <label htmlFor="pickup-time" className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
             <Clock className="h-3.5 w-3.5 text-[#1D4ED8]" aria-hidden="true" />
-            <span>Pickup Time</span>
+            <span>Pickup Time (IST)</span>
           </label>
           <select
             id="pickup-time"
@@ -178,7 +187,7 @@ export function VehicleSearchBar({
         <div>
           <label htmlFor="return-time" className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
             <Clock className="h-3.5 w-3.5 text-[#1D4ED8]" aria-hidden="true" />
-            <span>Return Time</span>
+            <span>Return Time (IST)</span>
           </label>
           <select
             id="return-time"

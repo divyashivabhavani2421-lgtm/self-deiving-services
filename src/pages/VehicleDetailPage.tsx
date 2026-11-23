@@ -1,44 +1,91 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
+  AlertCircle,
   ArrowLeft,
   Briefcase,
+  CalendarCheck2,
   CheckCircle2,
   FileCheck2,
   Fuel,
   Gauge,
+  Loader2,
   MapPin,
   Settings2,
   ShieldCheck,
+  Truck,
   Users,
 } from 'lucide-react';
-import { fetchVehicleBySlugOrId } from '../services/vehiclesService';
+import { BUSINESS_CONFIG } from '../config/businessConfig';
+import { useAuth } from '../context/AuthContext';
+import { createBooking, fetchVehicleBookedSlots } from '../services/bookingsService';
 import { listVehicleImages } from '../services/storageService';
+import { fetchVehicleBySlugOrId } from '../services/vehiclesService';
+import { BookedSlot, BookingRecord, PickupType, RentalDurationType } from '../types/booking';
 import { Vehicle } from '../types/vehicle';
-import { calculateRentalDays, formatINR, getDefaultSearchParams } from '../utils/rentalUtils';
+import {
+  addHoursInIST,
+  calculateBookingPricePreview,
+  calculateDurationHours,
+  formatDurationLabel,
+  formatINR,
+  formatISTDateTime,
+  getDefaultSearchParams,
+  getTodayInputDate,
+  hasBookingOverlap,
+  MIN_RENTAL_HOURS,
+  toISTTimestampIso,
+} from '../utils/rentalUtils';
 import { VehicleImage } from '../components/VehicleImage';
-import { WhatsAppButton } from '../components/WhatsAppButton';
 import { VehicleErrorState } from '../components/VehicleListStates';
+import { WhatsAppButton } from '../components/WhatsAppButton';
 
 export function VehicleDetailPage() {
   const { slug } = useParams<{ slug: string }>();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [storageImages, setStorageImages] = useState<string[]>([]);
+  const [bookedSlots, setBookedSlots] = useState<BookedSlot[]>([]);
   const [selectedImage, setSelectedImage] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConfigMissing, setIsConfigMissing] = useState(false);
 
   const defaults = getDefaultSearchParams();
+  const minDate = getTodayInputDate(0);
 
-  const [pickupDate, setPickupDate] = useState(searchParams.get('pickupDate') || defaults.pickupDate);
-  const [pickupTime, setPickupTime] = useState(searchParams.get('pickupTime') || defaults.pickupTime);
-  const [returnDate, setReturnDate] = useState(searchParams.get('returnDate') || defaults.returnDate);
-  const [returnTime, setReturnTime] = useState(searchParams.get('returnTime') || defaults.returnTime);
+  const initialPickupDate = searchParams.get('pickupDate') || defaults.pickupDate;
+  const initialPickupTime = searchParams.get('pickupTime') || defaults.pickupTime;
+  const initialReturnDate = searchParams.get('returnDate') || defaults.returnDate;
+  const initialReturnTime = searchParams.get('returnTime') || defaults.returnTime;
 
-  const loadVehicle = async (targetSlug: string) => {
+  const initialHours = calculateDurationHours({
+    pickupDate: initialPickupDate,
+    pickupTime: initialPickupTime,
+    returnDate: initialReturnDate,
+    returnTime: initialReturnTime,
+  });
+
+  const [pickupDate, setPickupDate] = useState(initialPickupDate);
+  const [pickupTime, setPickupTime] = useState(initialPickupTime);
+  const [returnDate, setReturnDate] = useState(initialReturnDate);
+  const [returnTime, setReturnTime] = useState(initialReturnTime);
+  const [rentalDuration, setRentalDuration] = useState<RentalDurationType>(
+    initialHours === 12 ? '12h' : initialHours === 24 ? '24h' : 'custom'
+  );
+  const [pickupType, setPickupType] = useState<PickupType>('hub_pickup');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const [submitting, setSubmitting] = useState(false);
+  const [bookingError, setBookingError] = useState('');
+  const [confirmedBooking, setConfirmedBooking] = useState<BookingRecord | null>(null);
+
+  const loadVehicle = useCallback(async (targetSlug: string) => {
     setLoading(true);
     setError(null);
     try {
@@ -50,20 +97,26 @@ export function VehicleDetailPage() {
       setIsConfigMissing(result.isConfigMissing);
 
       if (result.vehicle) {
-        const storageRes = await listVehicleImages(result.vehicle.id);
+        const [storageRes, slotsRes] = await Promise.all([
+          listVehicleImages(result.vehicle.id),
+          fetchVehicleBookedSlots(result.vehicle.id),
+        ]);
         setStorageImages(storageRes.files.map((f) => f.publicUrl));
+        setBookedSlots(slotsRes.slots);
       } else {
         setStorageImages([]);
+        setBookedSlots([]);
       }
     } catch (err) {
       setVehicle(null);
       setStorageImages([]);
+      setBookedSlots([]);
       setError(err instanceof Error ? err.message : 'Unable to load vehicle details.');
       setIsConfigMissing(false);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (slug) {
@@ -72,7 +125,7 @@ export function VehicleDetailPage() {
       setLoading(false);
       setVehicle(null);
     }
-  }, [slug]);
+  }, [slug, loadVehicle]);
 
   const galleryImages = useMemo(() => {
     if (!vehicle) return [];
@@ -89,6 +142,81 @@ export function VehicleDetailPage() {
   useEffect(() => {
     setSelectedImage(galleryImages[0] || '');
   }, [galleryImages]);
+
+  const handleSelectDurationPreset = (preset: RentalDurationType) => {
+    setRentalDuration(preset);
+    setBookingError('');
+    if (preset === '12h' || preset === '24h') {
+      const hours = preset === '12h' ? 12 : 24;
+      const computed = addHoursInIST(pickupDate, pickupTime, hours);
+      if (computed) {
+        setReturnDate(computed.date);
+        setReturnTime(computed.time);
+      }
+    }
+  };
+
+  const handlePickupDateChange = (nextDate: string) => {
+    setPickupDate(nextDate);
+    setBookingError('');
+    if (rentalDuration === '12h' || rentalDuration === '24h') {
+      const computed = addHoursInIST(nextDate, pickupTime, rentalDuration === '12h' ? 12 : 24);
+      if (computed) {
+        setReturnDate(computed.date);
+        setReturnTime(computed.time);
+      }
+    } else if (returnDate && nextDate > returnDate) {
+      setReturnDate(nextDate);
+    }
+  };
+
+  const handlePickupTimeChange = (nextTime: string) => {
+    setPickupTime(nextTime);
+    setBookingError('');
+    if (rentalDuration === '12h' || rentalDuration === '24h') {
+      const computed = addHoursInIST(pickupDate, nextTime, rentalDuration === '12h' ? 12 : 24);
+      if (computed) {
+        setReturnDate(computed.date);
+        setReturnTime(computed.time);
+      }
+    }
+  };
+
+  const startIso = useMemo(
+    () => toISTTimestampIso(pickupDate, pickupTime),
+    [pickupDate, pickupTime]
+  );
+  const endIso = useMemo(
+    () => toISTTimestampIso(returnDate, returnTime),
+    [returnDate, returnTime]
+  );
+
+  const durationHours = useMemo(
+    () => calculateDurationHours({ pickupDate, pickupTime, returnDate, returnTime }),
+    [pickupDate, pickupTime, returnDate, returnTime]
+  );
+
+  const isStartInPast = useMemo(() => {
+    if (!startIso) return false;
+    return new Date(startIso).getTime() < Date.now() - 5 * 60_000;
+  }, [startIso]);
+
+  const overlappingSlot = useMemo(() => {
+    if (!startIso || !endIso) return null;
+    return hasBookingOverlap(bookedSlots, startIso, endIso);
+  }, [bookedSlots, startIso, endIso]);
+
+  const priceBreakdown = useMemo(() => {
+    if (!vehicle || durationHours === null || durationHours < MIN_RENTAL_HOURS) {
+      return null;
+    }
+    return calculateBookingPricePreview({
+      dailyPrice: vehicle.dailyPrice,
+      hourlyPrice: vehicle.hourlyPrice,
+      durationHours,
+      pickupType,
+    });
+  }, [vehicle, durationHours, pickupType]);
 
   if (loading) {
     return (
@@ -145,13 +273,87 @@ export function VehicleDetailPage() {
     );
   }
 
-  const estimatedDays = calculateRentalDays({ pickupDate, pickupTime, returnDate, returnTime });
-  const estimatedTotal =
-    estimatedDays !== null && vehicle.dailyPrice !== null ? estimatedDays * vehicle.dailyPrice : null;
+  const handleBookingSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBookingError('');
+
+    if (!user) {
+      navigate('/login', {
+        state: {
+          from: `${location.pathname}${location.search}`,
+          notice: 'Sign in to complete your car booking.',
+        },
+      });
+      return;
+    }
+
+    if (!vehicle.isActive || !vehicle.isAvailable) {
+      setBookingError('This vehicle is currently marked unavailable for online booking.');
+      return;
+    }
+
+    if (!startIso || !endIso || new Date(endIso) <= new Date(startIso)) {
+      setBookingError('Return date and time must be after pickup date and time.');
+      return;
+    }
+
+    if (isStartInPast) {
+      setBookingError('Pickup date and time cannot be in the past (IST).');
+      return;
+    }
+
+    if (durationHours === null || durationHours < MIN_RENTAL_HOURS) {
+      setBookingError(`Minimum rental duration is ${MIN_RENTAL_HOURS} hours.`);
+      return;
+    }
+
+    if (overlappingSlot) {
+      setBookingError(
+        `This vehicle is already reserved from ${formatISTDateTime(overlappingSlot.startDate)} to ${formatISTDateTime(overlappingSlot.endDate)}. Please adjust your dates.`
+      );
+      return;
+    }
+
+    if (pickupType === 'doorstep_delivery' && deliveryAddress.trim().length < 5) {
+      setBookingError('Please enter your complete Siddipet delivery address for doorstep delivery.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await createBooking({
+        vehicleId: vehicle.id,
+        startDateIso: startIso,
+        endDateIso: endIso,
+        rentalDuration,
+        pickupType,
+        deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
+        notes: notes.trim() || undefined,
+      });
+
+      if (res.error || !res.booking) {
+        setBookingError(res.error || 'Could not complete your booking. Please try again.');
+        // Refresh booked slots in case a concurrent booking just succeeded
+        const slotsRes = await fetchVehicleBookedSlots(vehicle.id);
+        setBookedSlots(slotsRes.slots);
+        return;
+      }
+
+      setConfirmedBooking(res.booking);
+      const slotsRes = await fetchVehicleBookedSlots(vehicle.id);
+      setBookedSlots(slotsRes.slots);
+    } catch (err) {
+      setBookingError(err instanceof Error ? err.message : 'Unexpected error while submitting booking.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const rateText = vehicle.dailyPrice !== null ? ` at ${formatINR(vehicle.dailyPrice)}/day` : '';
   const specsText = [vehicle.fuelType, vehicle.transmission].filter(Boolean).join(', ');
-  const whatsappMessage = `Hello Siddipet Self Drive Cars, I am interested in renting the ${vehicle.name}${specsText ? ` (${specsText})` : ''}${rateText} from ${pickupDate} (${pickupTime}) to ${returnDate} (${returnTime}). Please share availability.`;
+  const whatsappMessage = `Hello Siddipet Self Drive Cars, I am interested in renting the ${vehicle.name}${specsText ? ` (${specsText})` : ''}${rateText} from ${pickupDate} (${pickupTime} IST) to ${returnDate} (${returnTime} IST). Please share availability.`;
+
+  const isBookable = vehicle.isActive && vehicle.isAvailable && priceBreakdown !== null;
 
   return (
     <div className="bg-white">
@@ -170,7 +372,7 @@ export function VehicleDetailPage() {
         </nav>
 
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
-          {/* Left Column: Image Gallery & Details */}
+          {/* Left Column: Image Gallery, Specs, Overview & Reserved Slots */}
           <div className="lg:col-span-7">
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
               <VehicleImage src={selectedImage} alt={`${vehicle.name} photo`} />
@@ -200,83 +402,10 @@ export function VehicleDetailPage() {
               </div>
             )}
 
-            {vehicle.description ? (
-              <div className="mt-8">
-                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Vehicle Overview</h2>
-                <p className="mt-3 text-base leading-relaxed text-slate-600">{vehicle.description}</p>
-              </div>
-            ) : null}
-
-            {vehicle.highlights.length > 0 && (
-              <div className="mt-8 border-t border-slate-200 pt-8">
-                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Features & Comfort</h2>
-                <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {vehicle.highlights.map((feature) => (
-                    <li key={feature} className="flex items-start gap-2.5 text-sm text-slate-700">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="mt-8 rounded-xl border border-slate-200 bg-slate-50 p-5">
-              <div className="flex items-start gap-3">
-                <FileCheck2 className="mt-0.5 h-5 w-5 shrink-0 text-[#0B1F3A]" aria-hidden="true" />
-                <div>
-                  <h3 className="font-display text-base font-bold text-[#0B1F3A]">Handover Requirements</h3>
-                  <p className="mt-1 text-sm leading-relaxed text-slate-600">
-                    Original valid Indian Driving License and Government Photo ID (Aadhaar / Passport) are verified at
-                    pickup in Siddipet.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Contiguous Specs & Inquiry Module */}
-          <div className="lg:col-span-5">
-            <div className="sticky top-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500">
-                <span>
-                  {vehicle.category}
-                  {vehicle.year ? ` · ${vehicle.year} Model` : ''}
-                </span>
-                <span className={vehicle.isAvailable ? 'text-[#15803D]' : 'text-amber-700'}>
-                  {vehicle.isAvailable ? 'Available for Pickup' : 'Currently Unavailable'}
-                </span>
-              </div>
-              <h1 className="mt-1 font-display text-2xl font-bold text-[#0B1F3A] sm:text-3xl">{vehicle.name}</h1>
-
-              <div className="mt-4 border-b border-slate-100 pb-5">
-                <div className="flex items-baseline gap-2">
-                  {vehicle.dailyPrice !== null ? (
-                    <>
-                      <span className="font-display text-3xl font-extrabold text-[#0B1F3A] tabular-nums">
-                        {formatINR(vehicle.dailyPrice)}
-                      </span>
-                      <span className="text-sm font-medium text-slate-500">per day (24 hrs)</span>
-                    </>
-                  ) : (
-                    <span className="text-base font-semibold text-slate-700">Contact for daily rate</span>
-                  )}
-                </div>
-
-                {(vehicle.hourlyPrice !== null || vehicle.securityDeposit !== null) && (
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 tabular-nums">
-                    {vehicle.hourlyPrice !== null && (
-                      <span>Hourly Rate: {formatINR(vehicle.hourlyPrice)}/hr</span>
-                    )}
-                    {vehicle.securityDeposit !== null && (
-                      <span>Refundable Deposit: {formatINR(vehicle.securityDeposit)}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Specifications Grid */}
-              <dl className="mt-5 grid grid-cols-2 gap-4 text-sm">
+            {/* Specifications Grid */}
+            <div className="mt-8 border-t border-slate-200 pt-8">
+              <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Vehicle Specifications</h2>
+              <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
                 <div className="flex items-center gap-2.5">
                   <Fuel className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
@@ -336,99 +465,455 @@ export function VehicleDetailPage() {
                 <div className="flex items-center gap-2.5">
                   <MapPin className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
-                    <dt className="text-xs text-slate-500">Pickup Location</dt>
+                    <dt className="text-xs text-slate-500">Pickup Hub</dt>
                     <dd className="font-semibold text-[#0B1F3A]">{vehicle.pickupLocation || 'Siddipet, TS'}</dd>
                   </div>
                 </div>
               </dl>
+            </div>
 
-              {/* Trip Duration Estimator */}
-              <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-semibold text-[#0B1F3A]">Select Trip Dates to Estimate Duration</p>
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  <div>
-                    <label htmlFor="detail-pickup" className="block text-[11px] font-medium text-slate-600">
-                      Pickup Date
-                    </label>
-                    <input
-                      id="detail-pickup"
-                      type="date"
-                      value={pickupDate}
-                      onChange={(e) => setPickupDate(e.target.value)}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="detail-pickup-time" className="block text-[11px] font-medium text-slate-600">
-                      Pickup Time
-                    </label>
-                    <input
-                      id="detail-pickup-time"
-                      type="time"
-                      value={pickupTime}
-                      onChange={(e) => setPickupTime(e.target.value)}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="detail-return" className="block text-[11px] font-medium text-slate-600">
-                      Return Date
-                    </label>
-                    <input
-                      id="detail-return"
-                      type="date"
-                      value={returnDate}
-                      min={pickupDate}
-                      onChange={(e) => setReturnDate(e.target.value)}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="detail-return-time" className="block text-[11px] font-medium text-slate-600">
-                      Return Time
-                    </label>
-                    <input
-                      id="detail-return-time"
-                      type="time"
-                      value={returnTime}
-                      onChange={(e) => setReturnTime(e.target.value)}
-                      className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums"
-                    />
-                  </div>
+            {vehicle.description ? (
+              <div className="mt-8 border-t border-slate-200 pt-8">
+                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Vehicle Overview</h2>
+                <p className="mt-3 text-base leading-relaxed text-slate-600">{vehicle.description}</p>
+              </div>
+            ) : null}
+
+            {vehicle.highlights.length > 0 && (
+              <div className="mt-8 border-t border-slate-200 pt-8">
+                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Features &amp; Comfort</h2>
+                <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {vehicle.highlights.map((feature) => (
+                    <li key={feature} className="flex items-start gap-2.5 text-sm text-slate-700">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Upcoming Reserved Windows (No PII exposed) */}
+            {bookedSlots.length > 0 && (
+              <div className="mt-8 border-t border-slate-200 pt-8">
+                <div className="flex items-center gap-2">
+                  <CalendarCheck2 className="h-5 w-5 text-[#1D4ED8]" aria-hidden="true" />
+                  <h2 className="font-display text-lg font-bold text-[#0B1F3A]">
+                    Upcoming Reserved Windows (IST)
+                  </h2>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  Existing pending and confirmed reservations for this vehicle. Select dates outside these ranges.
+                </p>
+                <ul className="mt-3 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/70 text-xs">
+                  {bookedSlots.slice(0, 6).map((slot, idx) => (
+                    <li key={`${slot.startDate}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 tabular-nums">
+                      <span className="font-medium text-[#0B1F3A]">
+                        {formatISTDateTime(slot.startDate)} → {formatISTDateTime(slot.endDate)}
+                      </span>
+                      <span className="font-semibold text-amber-800">
+                        {slot.status === 'confirmed' ? 'Confirmed' : 'Pending'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="mt-8 rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <div className="flex items-start gap-3">
+                <FileCheck2 className="mt-0.5 h-5 w-5 shrink-0 text-[#0B1F3A]" aria-hidden="true" />
+                <div>
+                  <h3 className="font-display text-base font-bold text-[#0B1F3A]">Handover Requirements</h3>
+                  <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                    Original valid Indian Driving License and Government Photo ID (Aadhaar / Passport) are verified at
+                    pickup in Siddipet.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Contiguous Booking & Pricing Module */}
+          <div className="lg:col-span-5">
+            <div className="sticky top-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500">
+                <span>
+                  {vehicle.category}
+                  {vehicle.year ? ` · ${vehicle.year} Model` : ''}
+                </span>
+                <span className={vehicle.isAvailable ? 'text-[#15803D]' : 'text-amber-700'}>
+                  {vehicle.isAvailable ? 'Available for Booking' : 'Currently Unavailable'}
+                </span>
+              </div>
+              <h1 className="mt-1 font-display text-2xl font-bold text-[#0B1F3A] sm:text-3xl">{vehicle.name}</h1>
+
+              <div className="mt-4 border-b border-slate-100 pb-4">
+                <div className="flex items-baseline gap-2">
+                  {vehicle.dailyPrice !== null ? (
+                    <>
+                      <span className="font-display text-3xl font-extrabold text-[#0B1F3A] tabular-nums">
+                        {formatINR(vehicle.dailyPrice)}
+                      </span>
+                      <span className="text-sm font-medium text-slate-500">per day (24 hrs)</span>
+                    </>
+                  ) : (
+                    <span className="text-base font-semibold text-slate-700">Rate on inquiry</span>
+                  )}
                 </div>
 
-                {estimatedDays !== null ? (
-                  <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3 text-sm">
-                    <span className="text-slate-600 tabular-nums">
-                      Estimated ({estimatedDays} {estimatedDays === 1 ? 'Day' : 'Days'})
-                    </span>
-                    <span className="font-display text-lg font-bold text-[#0B1F3A] tabular-nums">
-                      {estimatedTotal !== null ? formatINR(estimatedTotal) : 'Rate on inquiry'}
-                    </span>
+                {(vehicle.hourlyPrice !== null || vehicle.securityDeposit !== null) && (
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 tabular-nums">
+                    {vehicle.hourlyPrice !== null && (
+                      <span>Hourly Rate: {formatINR(vehicle.hourlyPrice)}/hr</span>
+                    )}
+                    {vehicle.securityDeposit !== null && (
+                      <span>Refundable Deposit: {formatINR(vehicle.securityDeposit)}</span>
+                    )}
                   </div>
-                ) : (
-                  <p className="mt-3 text-xs text-red-700">Return date & time must be after pickup date & time.</p>
                 )}
               </div>
 
-              {/* Action CTAs */}
-              <div className="mt-6 flex flex-col gap-3">
-                <WhatsAppButton
-                  label="Inquire Availability on WhatsApp"
-                  message={whatsappMessage}
-                  variant="primary"
-                  className="w-full justify-center py-3"
-                />
-                <Link
-                  to="/contact"
-                  className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-[#0B1F3A] transition-colors hover:bg-slate-50"
-                >
-                  Send Inquiry via Contact Form
-                </Link>
-              </div>
-              <p className="mt-3 text-center text-xs text-slate-500">
-                No online payment required on this page. Confirm vehicle availability directly before pickup.
-              </p>
+              {confirmedBooking ? (
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-[#166534]">
+                    <div className="flex items-start gap-2.5">
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                      <div>
+                        <p className="font-display font-bold text-[#0B1F3A]">Booking Request Submitted</p>
+                        <p className="mt-1 text-xs leading-relaxed">
+                          Your reservation is currently <strong>Pending</strong> administrator confirmation.
+                        </p>
+                      </div>
+                    </div>
+
+                    <dl className="mt-4 space-y-2 border-t border-emerald-200/70 pt-3 text-xs text-[#0B1F3A]">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-600">Booking ID</dt>
+                        <dd className="font-mono font-semibold">{confirmedBooking.id.slice(0, 8).toUpperCase()}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-600">Pickup (IST)</dt>
+                        <dd className="font-medium tabular-nums">{formatISTDateTime(confirmedBooking.startDate)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-600">Return (IST)</dt>
+                        <dd className="font-medium tabular-nums">{formatISTDateTime(confirmedBooking.endDate)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-600">Total Amount</dt>
+                        <dd className="font-bold tabular-nums">{formatINR(confirmedBooking.totalAmount)}</dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="flex flex-col gap-2.5">
+                    <Link
+                      to="/dashboard"
+                      className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                    >
+                      View My Bookings
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmedBooking(null)}
+                      className="inline-flex min-h-[42px] w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-[#0B1F3A] hover:bg-slate-50"
+                    >
+                      Book Another Schedule
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleBookingSubmit} className="mt-5 space-y-4" noValidate>
+                  {/* Rental Duration Segmented Control */}
+                  <div>
+                    <span className="block text-xs font-semibold text-slate-700">
+                      Rental Duration (Min {MIN_RENTAL_HOURS} hrs · IST)
+                    </span>
+                    <div className="mt-1.5 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Rental duration">
+                      {(
+                        [
+                          { id: '12h', label: '12 Hours' },
+                          { id: '24h', label: '24 Hours' },
+                          { id: 'custom', label: 'Custom' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleSelectDurationPreset(opt.id)}
+                          className={`rounded-md px-2.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+                            rentalDuration === opt.id
+                              ? 'bg-white text-[#0B1F3A] shadow-sm'
+                              : 'text-slate-600 hover:text-[#0B1F3A]'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Pickup & Return Date/Time */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="detail-pickup" className="block text-[11px] font-semibold text-slate-700">
+                        Pickup Date
+                      </label>
+                      <input
+                        id="detail-pickup"
+                        type="date"
+                        min={minDate}
+                        value={pickupDate}
+                        onChange={(e) => handlePickupDateChange(e.target.value)}
+                        className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="detail-pickup-time" className="block text-[11px] font-semibold text-slate-700">
+                        Pickup Time (IST)
+                      </label>
+                      <input
+                        id="detail-pickup-time"
+                        type="time"
+                        value={pickupTime}
+                        onChange={(e) => handlePickupTimeChange(e.target.value)}
+                        className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="detail-return" className="block text-[11px] font-semibold text-slate-700">
+                        Return Date
+                      </label>
+                      <input
+                        id="detail-return"
+                        type="date"
+                        min={pickupDate || minDate}
+                        value={returnDate}
+                        onChange={(e) => {
+                          setReturnDate(e.target.value);
+                          setRentalDuration('custom');
+                          setBookingError('');
+                        }}
+                        className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="detail-return-time" className="block text-[11px] font-semibold text-slate-700">
+                        Return Time (IST)
+                      </label>
+                      <input
+                        id="detail-return-time"
+                        type="time"
+                        value={returnTime}
+                        onChange={(e) => {
+                          setReturnTime(e.target.value);
+                          setRentalDuration('custom');
+                          setBookingError('');
+                        }}
+                        className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {/* Pickup Option */}
+                  <div>
+                    <span className="block text-xs font-semibold text-slate-700">Pickup Option</span>
+                    <div className="mt-1.5 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPickupType('hub_pickup');
+                          setBookingError('');
+                        }}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-xs transition-colors ${
+                          pickupType === 'hub_pickup'
+                            ? 'border-[#1D4ED8] bg-blue-50/60 text-[#0B1F3A]'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <MapPin className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                        <div>
+                          <div className="font-semibold">Hub Pickup</div>
+                          <div className="text-[11px] text-slate-500">Free · Siddipet</div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPickupType('doorstep_delivery');
+                          setBookingError('');
+                        }}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-xs transition-colors ${
+                          pickupType === 'doorstep_delivery'
+                            ? 'border-[#1D4ED8] bg-blue-50/60 text-[#0B1F3A]'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Truck className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+                        <div>
+                          <div className="font-semibold">Doorstep</div>
+                          <div className="text-[11px] text-slate-500 tabular-nums">
+                            +{formatINR(BUSINESS_CONFIG.doorstepDeliveryFee)}
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {pickupType === 'doorstep_delivery' && (
+                    <div>
+                      <label htmlFor="delivery-address" className="block text-xs font-semibold text-slate-700">
+                        Siddipet Delivery Address *
+                      </label>
+                      <textarea
+                        id="delivery-address"
+                        rows={2}
+                        value={deliveryAddress}
+                        onChange={(e) => {
+                          setDeliveryAddress(e.target.value);
+                          setBookingError('');
+                        }}
+                        placeholder="House/Flat No, Colony, Landmark in Siddipet..."
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-2.5 text-xs text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none"
+                        required
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label htmlFor="booking-notes" className="block text-xs font-semibold text-slate-700">
+                      Booking Notes <span className="font-normal text-slate-500">(Optional)</span>
+                    </label>
+                    <textarea
+                      id="booking-notes"
+                      rows={2}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Any pickup instructions or travel plans..."
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-2.5 text-xs text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Validation / Overlap Banner */}
+                  {durationHours === null ? (
+                    <p className="text-xs font-medium text-red-700">
+                      Return date &amp; time must be after pickup date &amp; time.
+                    </p>
+                  ) : durationHours < MIN_RENTAL_HOURS ? (
+                    <p className="text-xs font-medium text-red-700">
+                      Minimum rental duration is {MIN_RENTAL_HOURS} hours (selected: {durationHours} hrs).
+                    </p>
+                  ) : isStartInPast ? (
+                    <p className="text-xs font-medium text-red-700">
+                      Pickup date and time cannot be in the past (IST).
+                    </p>
+                  ) : overlappingSlot ? (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>
+                        Selected dates overlap an active reservation ({formatISTDateTime(overlappingSlot.startDate)} –{' '}
+                        {formatISTDateTime(overlappingSlot.endDate)}).
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {/* Clear INR Price Breakdown */}
+                  {priceBreakdown && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs">
+                      <div className="space-y-2">
+                        <div className="flex justify-between gap-2 text-slate-600">
+                          <span>Duration</span>
+                          <span className="font-semibold text-[#0B1F3A] tabular-nums">
+                            {formatDurationLabel(priceBreakdown.durationHours)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-2 text-slate-600">
+                          <span>Base Rental Amount</span>
+                          <span className="font-semibold text-[#0B1F3A] tabular-nums">
+                            {formatINR(priceBreakdown.baseAmount)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-2 text-slate-600">
+                          <span>
+                            {pickupType === 'doorstep_delivery' ? 'Doorstep Delivery Fee' : 'Hub Pickup Fee'}
+                          </span>
+                          <span className="font-semibold text-[#0B1F3A] tabular-nums">
+                            {priceBreakdown.deliveryFee > 0 ? formatINR(priceBreakdown.deliveryFee) : '₹0'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 border-t border-slate-200 pt-2.5 text-sm">
+                          <span className="font-bold text-[#0B1F3A]">Estimated Total</span>
+                          <span className="font-display text-xl font-extrabold text-[#0B1F3A] tabular-nums">
+                            {formatINR(priceBreakdown.totalAmount)}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        Final price and availability are verified on the server upon submission.
+                      </p>
+                    </div>
+                  )}
+
+                  {bookingError && (
+                    <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>{bookingError}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2.5 pt-1">
+                    {user ? (
+                      <button
+                        type="submit"
+                        disabled={submitting || !isBookable || isStartInPast || Boolean(overlappingSlot)}
+                        className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-55"
+                      >
+                        {submitting ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <CalendarCheck2 className="h-4 w-4" aria-hidden="true" />
+                        )}
+                        <span>
+                          {submitting
+                            ? 'Confirming Availability...'
+                            : !vehicle.isAvailable
+                              ? 'Currently Unavailable'
+                              : 'Request Booking'}
+                        </span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate('/login', {
+                            state: {
+                              from: `${location.pathname}${location.search}`,
+                              notice: 'Sign in with your customer account to book this vehicle.',
+                            },
+                          })
+                        }
+                        className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                      >
+                        <CalendarCheck2 className="h-4 w-4" aria-hidden="true" />
+                        <span>Sign In to Request Booking</span>
+                      </button>
+                    )}
+
+                    <WhatsAppButton
+                      label="Inquire on WhatsApp"
+                      message={whatsappMessage}
+                      variant="outline"
+                      className="w-full justify-center py-2.5"
+                    />
+                  </div>
+                </form>
+              )}
             </div>
           </div>
         </div>

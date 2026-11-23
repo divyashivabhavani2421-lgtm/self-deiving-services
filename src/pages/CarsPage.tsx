@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { RotateCcw, Search } from 'lucide-react';
+import { CalendarCheck2, RotateCcw, Search } from 'lucide-react';
 import { useVehicles } from '../hooks/useVehicles';
+import { fetchUnavailableVehicleIds } from '../services/bookingsService';
 import { RentalSearchParams } from '../types/vehicle';
-import { buildSearchQueryString, calculateRentalDays } from '../utils/rentalUtils';
+import {
+  buildSearchQueryString,
+  calculateDurationHours,
+  formatDurationLabel,
+  formatISTDateTime,
+  MIN_RENTAL_HOURS,
+  toISTTimestampIso,
+} from '../utils/rentalUtils';
 import { VehicleCard } from '../components/VehicleCard';
 import { VehicleSearchBar } from '../components/VehicleSearchBar';
 import {
@@ -25,13 +33,71 @@ export function CarsPage() {
     returnTime: searchParams.get('returnTime') || undefined,
   };
 
+  const hasExplicitSchedule = Boolean(initialSchedule.pickupDate && initialSchedule.returnDate);
+
   const [query, setQuery] = useState('');
   const [fuelFilter, setFuelFilter] = useState<string>('All');
   const [transmissionFilter, setTransmissionFilter] = useState<string>('All');
   const [sortOrder, setSortOrder] = useState<SortOrder>('featured');
 
+  const [bookedVehicleIds, setBookedVehicleIds] = useState<Set<string>>(new Set());
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+
+  const scheduleIsoWindow = useMemo(() => {
+    if (!hasExplicitSchedule || !initialSchedule.pickupDate || !initialSchedule.returnDate) {
+      return null;
+    }
+    const startIso = toISTTimestampIso(
+      initialSchedule.pickupDate,
+      initialSchedule.pickupTime || '09:00'
+    );
+    const endIso = toISTTimestampIso(
+      initialSchedule.returnDate,
+      initialSchedule.returnTime || '09:00'
+    );
+    const durationHours = calculateDurationHours(initialSchedule);
+    if (!startIso || !endIso || durationHours === null || durationHours < MIN_RENTAL_HOURS) {
+      return null;
+    }
+    return { startIso, endIso, durationHours };
+  }, [
+    hasExplicitSchedule,
+    initialSchedule.pickupDate,
+    initialSchedule.pickupTime,
+    initialSchedule.returnDate,
+    initialSchedule.returnTime,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadOverlapConflicts() {
+      if (!scheduleIsoWindow) {
+        setBookedVehicleIds(new Set());
+        return;
+      }
+      setCheckingAvailability(true);
+      try {
+        const res = await fetchUnavailableVehicleIds(
+          scheduleIsoWindow.startIso,
+          scheduleIsoWindow.endIso
+        );
+        if (active) {
+          setBookedVehicleIds(res.vehicleIds);
+        }
+      } finally {
+        if (active) {
+          setCheckingAvailability(false);
+        }
+      }
+    }
+
+    void loadOverlapConflicts();
+    return () => {
+      active = false;
+    };
+  }, [scheduleIsoWindow]);
+
   const currentSearchQuery = buildSearchQueryString(initialSchedule);
-  const rentalDays = calculateRentalDays(initialSchedule);
 
   const fuelOptions = useMemo(() => {
     const distinct = Array.from(
@@ -56,10 +122,28 @@ export function CarsPage() {
     });
   };
 
+  const clearScheduleFilter = () => {
+    setSearchParams({});
+  };
+
+  const availableForPeriodVehicles = useMemo(() => {
+    if (!scheduleIsoWindow) {
+      return vehicles;
+    }
+    return vehicles.filter(
+      (car) => car.isActive && car.isAvailable && !bookedVehicleIds.has(car.id)
+    );
+  }, [vehicles, scheduleIsoWindow, bookedVehicleIds]);
+
+  const unavailableCountForPeriod = useMemo(() => {
+    if (!scheduleIsoWindow) return 0;
+    return vehicles.length - availableForPeriodVehicles.length;
+  }, [vehicles.length, availableForPeriodVehicles.length, scheduleIsoWindow]);
+
   const filteredVehicles = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    const list = vehicles.filter((car) => {
+    const list = availableForPeriodVehicles.filter((car) => {
       if (fuelFilter !== 'All' && car.fuelType.toLowerCase() !== fuelFilter.toLowerCase()) {
         return false;
       }
@@ -89,7 +173,7 @@ export function CarsPage() {
       return [...list].sort((a, b) => (b.dailyPrice ?? -1) - (a.dailyPrice ?? -1));
     }
     return list;
-  }, [vehicles, query, fuelFilter, transmissionFilter, sortOrder]);
+  }, [availableForPeriodVehicles, query, fuelFilter, transmissionFilter, sortOrder]);
 
   const resetFilters = () => {
     setQuery('');
@@ -117,7 +201,7 @@ export function CarsPage() {
             <VehicleSearchBar
               initialValues={initialSchedule}
               onSearch={handleScheduleSearch}
-              submitLabel="Update Schedule"
+              submitLabel="Check Availability"
             />
           </div>
         </div>
@@ -199,19 +283,47 @@ export function CarsPage() {
           </div>
         </div>
 
+        {/* Selected Period Availability Banner */}
+        {scheduleIsoWindow && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-xs text-[#0B1F3A]">
+            <div className="flex items-center gap-2">
+              <CalendarCheck2 className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
+              <span>
+                Showing cars available from{' '}
+                <strong className="font-semibold">{formatISTDateTime(scheduleIsoWindow.startIso)}</strong> to{' '}
+                <strong className="font-semibold">{formatISTDateTime(scheduleIsoWindow.endIso)}</strong>{' '}
+                <span className="text-slate-600 tabular-nums">
+                  ({formatDurationLabel(scheduleIsoWindow.durationHours)})
+                </span>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={clearScheduleFilter}
+              className="font-semibold text-[#1D4ED8] hover:text-[#0B1F3A] whitespace-nowrap"
+            >
+              Show All Fleet
+            </button>
+          </div>
+        )}
+
         {/* Results Meta */}
         {!loading && !error && (
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
             <p className="tabular-nums">
-              Showing <span className="font-semibold text-[#0B1F3A]">{filteredVehicles.length}</span>{' '}
-              {filteredVehicles.length === 1 ? 'vehicle' : 'vehicles'}
-              {rentalDays !== null && (
+              {checkingAvailability ? (
+                'Checking vehicle availability for your selected dates...'
+              ) : (
                 <>
-                  {' '}
-                  <span aria-hidden="true">·</span> Selected duration:{' '}
-                  <span className="font-semibold text-[#1D4ED8]">
-                    {rentalDays} {rentalDays === 1 ? 'Day' : 'Days'}
-                  </span>
+                  Showing <span className="font-semibold text-[#0B1F3A]">{filteredVehicles.length}</span>{' '}
+                  {filteredVehicles.length === 1 ? 'available vehicle' : 'available vehicles'}
+                  {scheduleIsoWindow && unavailableCountForPeriod > 0 ? (
+                    <span className="text-slate-500">
+                      {' '}
+                      · {unavailableCountForPeriod}{' '}
+                      {unavailableCountForPeriod === 1 ? 'car' : 'cars'} reserved or unavailable for this period
+                    </span>
+                  ) : null}
                 </>
               )}
             </p>
@@ -220,7 +332,7 @@ export function CarsPage() {
 
         {/* Loading, Error, Empty, or Grid */}
         <div className="mt-6">
-          {loading ? (
+          {loading || checkingAvailability ? (
             <VehicleGridSkeleton count={3} />
           ) : error ? (
             <VehicleErrorState error={error} isConfigMissing={isConfigMissing} onRetry={reload} />
@@ -231,6 +343,23 @@ export function CarsPage() {
               actionLabel="Refresh Vehicles"
               onAction={reload}
             />
+          ) : availableForPeriodVehicles.length === 0 && scheduleIsoWindow ? (
+            <div className="rounded-xl border border-slate-200 bg-white px-6 py-14 text-center">
+              <h2 className="font-display text-lg font-bold text-[#0B1F3A]">
+                All vehicles are reserved for this window
+              </h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Try adjusting your pickup or return date/time above, or view the full fleet schedule.
+              </p>
+              <button
+                type="button"
+                onClick={clearScheduleFilter}
+                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+              >
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                <span>Show All Fleet</span>
+              </button>
+            </div>
           ) : filteredVehicles.length > 0 ? (
             <div className="grid grid-cols-1 gap-7 md:grid-cols-2 lg:grid-cols-3">
               {filteredVehicles.map((vehicle) => (

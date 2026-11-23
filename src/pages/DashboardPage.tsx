@@ -1,19 +1,38 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  AlertCircle,
   CalendarClock,
   CarFront,
   CheckCircle2,
+  Clock,
   Loader2,
   LogOut,
   Mail,
+  MapPin,
   Phone,
+  RefreshCw,
   Save,
   ShieldCheck,
+  Truck,
   User as UserIcon,
+  XCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { cancelOwnBooking, fetchMyBookings } from '../services/bookingsService';
 import { updateOwnProfile } from '../services/profileService';
+import { BookingRecord, BookingStatus } from '../types/booking';
+import { formatDurationLabel, formatINR, formatISTDateTime } from '../utils/rentalUtils';
+import { VehicleImage } from '../components/VehicleImage';
+
+type BookingTab = 'upcoming' | 'past' | 'all';
+
+const STATUS_DISPLAY: Record<BookingStatus, { label: string; className: string }> = {
+  pending: { label: 'Pending Confirmation', className: 'text-amber-700' },
+  confirmed: { label: 'Confirmed', className: 'text-[#15803D]' },
+  completed: { label: 'Completed', className: 'text-[#1D4ED8]' },
+  cancelled: { label: 'Cancelled', className: 'text-slate-500' },
+};
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -30,6 +49,14 @@ export function DashboardPage() {
   const [saveError, setSaveError] = useState('');
   const [saveSuccess, setSaveSuccess] = useState('');
 
+  const [bookings, setBookings] = useState<BookingRecord[]>([]);
+  const [bookingsLoading, setBookingsLoading] = useState(true);
+  const [bookingsError, setBookingsError] = useState('');
+  const [bookingNotice, setBookingNotice] = useState('');
+  const [bookingTab, setBookingTab] = useState<BookingTab>('upcoming');
+  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
   useEffect(() => {
     if (profile) {
       setFullName(profile.fullName || '');
@@ -39,6 +66,53 @@ export function DashboardPage() {
       setDrivingLicenseNumber(profile.drivingLicenseNumber || '');
     }
   }, [profile]);
+
+  const loadBookings = useCallback(async () => {
+    if (!user) return;
+    setBookingsLoading(true);
+    setBookingsError('');
+    try {
+      const res = await fetchMyBookings(user.id);
+      if (res.error) {
+        setBookingsError(res.error);
+      } else {
+        setBookings(res.bookings);
+      }
+    } finally {
+      setBookingsLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    void loadBookings();
+  }, [loadBookings]);
+
+  const { upcomingBookings, pastBookings } = useMemo(() => {
+    const nowMs = Date.now();
+    const upcoming: BookingRecord[] = [];
+    const past: BookingRecord[] = [];
+
+    for (const item of bookings) {
+      const endMs = new Date(item.endDate).getTime();
+      const isActiveWindow =
+        (item.status === 'pending' || item.status === 'confirmed') &&
+        (Number.isNaN(endMs) || endMs >= nowMs);
+
+      if (isActiveWindow) {
+        upcoming.push(item);
+      } else {
+        past.push(item);
+      }
+    }
+
+    return { upcomingBookings: upcoming, pastBookings: past };
+  }, [bookings]);
+
+  const displayedBookings = useMemo(() => {
+    if (bookingTab === 'upcoming') return upcomingBookings;
+    if (bookingTab === 'past') return pastBookings;
+    return bookings;
+  }, [bookingTab, upcomingBookings, pastBookings, bookings]);
 
   const availableCols = new Set(profile?.availableColumns ?? []);
   const hasAddressCol = availableCols.has('address');
@@ -93,6 +167,26 @@ export function DashboardPage() {
     }
   };
 
+  const handleConfirmCancel = async (booking: BookingRecord) => {
+    setCancellingId(booking.id);
+    setBookingsError('');
+    setBookingNotice('');
+    try {
+      const res = await cancelOwnBooking(booking.id);
+      if (res.error) {
+        setBookingsError(res.error);
+        return;
+      }
+      setConfirmCancelId(null);
+      setBookingNotice(
+        `Booking ${booking.id.slice(0, 8).toUpperCase()} has been cancelled.`
+      );
+      await loadBookings();
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
@@ -118,7 +212,7 @@ export function DashboardPage() {
               Welcome, {displayName}
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Manage your personal contact information and prepare for upcoming self-drive rentals in Siddipet.
+              Manage your self-drive reservations in IST (Asia/Kolkata) and personal contact details.
             </p>
           </div>
 
@@ -126,7 +220,7 @@ export function DashboardPage() {
             {isAdmin && (
               <Link
                 to="/admin"
-                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#1D4ED8] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1E40AF]"
+                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#1D4ED8] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1E40AF] whitespace-nowrap"
               >
                 <ShieldCheck className="h-4 w-4" aria-hidden="true" />
                 <span>Open Admin Dashboard</span>
@@ -137,7 +231,7 @@ export function DashboardPage() {
               type="button"
               disabled={loggingOut}
               onClick={handleLogout}
-              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-[#0B1F3A] transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-[#0B1F3A] transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-700 disabled:opacity-60 whitespace-nowrap"
             >
               {loggingOut ? (
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -149,10 +243,235 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {/* My Bookings Section */}
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
+          <div className="flex flex-col justify-between gap-4 border-b border-slate-100 pb-5 sm:flex-row sm:items-center">
+            <div>
+              <div className="flex items-center gap-2">
+                <CalendarClock className="h-5 w-5 text-[#1D4ED8]" aria-hidden="true" />
+                <h2 className="font-display text-xl font-bold text-[#0B1F3A]">My Bookings</h2>
+              </div>
+              <p className="mt-1 text-xs text-slate-600 sm:text-sm">
+                Upcoming and past self-drive trips in Siddipet. Pending bookings may be cancelled before confirmation.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div
+                className="flex items-center gap-1 rounded-lg bg-slate-100 p-1"
+                role="group"
+                aria-label="Filter bookings by schedule"
+              >
+                {(
+                  [
+                    { id: 'upcoming', label: `Upcoming (${upcomingBookings.length})` },
+                    { id: 'past', label: `Past (${pastBookings.length})` },
+                    { id: 'all', label: `All (${bookings.length})` },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setBookingTab(tab.id)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap tabular-nums ${
+                      bookingTab === tab.id
+                        ? 'bg-white text-[#0B1F3A] shadow-sm'
+                        : 'text-slate-600 hover:text-[#0B1F3A]'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void loadBookings()}
+                aria-label="Refresh bookings"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-[#0B1F3A] hover:bg-slate-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${bookingsLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                <span>Refresh</span>
+              </button>
+            </div>
+          </div>
+
+          {bookingNotice && (
+            <div className="mt-5 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-[#166534]">
+              <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{bookingNotice}</span>
+            </div>
+          )}
+
+          {bookingsError && (
+            <div role="alert" className="mt-5 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{bookingsError}</span>
+            </div>
+          )}
+
+          <div className="mt-6">
+            {bookingsLoading ? (
+              <div className="space-y-4" aria-busy="true">
+                {[1, 2].map((n) => (
+                  <div key={n} className="h-28 animate-pulse rounded-xl bg-slate-100" />
+                ))}
+              </div>
+            ) : displayedBookings.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-6 py-10 text-center">
+                <p className="font-display text-base font-bold text-[#0B1F3A]">
+                  {bookingTab === 'upcoming'
+                    ? 'No upcoming bookings yet'
+                    : bookingTab === 'past'
+                      ? 'No past or cancelled bookings'
+                      : 'You have not booked a vehicle yet'}
+                </p>
+                <p className="mt-1.5 text-sm text-slate-600">
+                  Choose pickup and return dates in Siddipet to reserve your self-drive car.
+                </p>
+                <Link
+                  to="/cars"
+                  className="mt-5 inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                >
+                  <CarFront className="h-4 w-4" aria-hidden="true" />
+                  <span>Browse Available Cars</span>
+                </Link>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-200 rounded-xl border border-slate-200">
+                {displayedBookings.map((booking) => {
+                  const statusMeta = STATUS_DISPLAY[booking.status];
+                  const isBusy = cancellingId === booking.id;
+                  const isConfirming = confirmCancelId === booking.id;
+                  const shortRef = booking.id.slice(0, 8).toUpperCase();
+
+                  return (
+                    <article
+                      key={booking.id}
+                      className="flex flex-col justify-between gap-5 p-4 sm:p-5 lg:flex-row lg:items-center"
+                    >
+                      {/* Vehicle Thumbnail + Metadata */}
+                      <div className="flex items-start gap-4">
+                        <div className="w-24 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                          <VehicleImage
+                            src={booking.vehicleImageUrl || ''}
+                            alt={booking.vehicleName || 'Booked car'}
+                            aspectClassName="aspect-[4/3]"
+                          />
+                        </div>
+
+                        <div className="min-w-0 space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                            <span className="font-mono font-semibold text-[#0B1F3A]">#{shortRef}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className={`font-semibold ${statusMeta.className}`}>
+                              {statusMeta.label}
+                            </span>
+                          </div>
+
+                          <h3 className="font-display text-base font-bold text-[#0B1F3A]">
+                            {booking.vehicleSlug || booking.vehicleId ? (
+                              <Link
+                                to={`/cars/${encodeURIComponent(booking.vehicleSlug || booking.vehicleId)}`}
+                                className="hover:text-[#1D4ED8]"
+                              >
+                                {booking.vehicleName || 'Siddipet Self-Drive Vehicle'}
+                              </Link>
+                            ) : (
+                              booking.vehicleName || 'Siddipet Self-Drive Vehicle'
+                            )}
+                          </h3>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 tabular-nums">
+                            <span className="inline-flex items-center gap-1">
+                              <Clock className="h-3.5 w-3.5 text-[#1D4ED8]" aria-hidden="true" />
+                              {formatISTDateTime(booking.startDate)} → {formatISTDateTime(booking.endDate)}
+                            </span>
+                            <span>
+                              {formatDurationLabel(booking.durationHours)} ({booking.rentalDuration})
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                            <span className="inline-flex items-center gap-1">
+                              {booking.pickupType === 'doorstep_delivery' ? (
+                                <Truck className="h-3.5 w-3.5 text-[#1D4ED8]" aria-hidden="true" />
+                              ) : (
+                                <MapPin className="h-3.5 w-3.5 text-[#1D4ED8]" aria-hidden="true" />
+                              )}
+                              {booking.pickupType === 'doorstep_delivery'
+                                ? `Doorstep Delivery${booking.deliveryAddress ? `: ${booking.deliveryAddress}` : ''}`
+                                : 'Siddipet Hub Pickup'}
+                            </span>
+                            {booking.notes && (
+                              <span className="truncate max-w-md">Note: {booking.notes}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Price & Pending Cancel Control */}
+                      <div className="flex flex-row items-center justify-between gap-4 border-t border-slate-100 pt-3 lg:flex-col lg:items-end lg:border-t-0 lg:pt-0">
+                        <div className="lg:text-right">
+                          <div className="font-display text-lg font-bold text-[#0B1F3A] tabular-nums">
+                            {formatINR(booking.totalAmount)}
+                          </div>
+                          <div className="text-[11px] text-slate-500 tabular-nums">
+                            Base {formatINR(booking.baseAmount)}
+                            {booking.deliveryFee > 0 ? ` + Delivery ${formatINR(booking.deliveryFee)}` : ''}
+                          </div>
+                        </div>
+
+                        {booking.status === 'pending' && (
+                          <div className="flex items-center gap-2">
+                            {isConfirming ? (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => void handleConfirmCancel(booking)}
+                                  className="inline-flex h-9 items-center gap-1 rounded-lg bg-red-700 px-3 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60 whitespace-nowrap"
+                                >
+                                  {isBusy ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                                  ) : (
+                                    <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                                  )}
+                                  <span>{isBusy ? 'Cancelling...' : 'Confirm Cancel'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => setConfirmCancelId(null)}
+                                  className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                >
+                                  Keep
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmCancelId(booking.id)}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 whitespace-nowrap"
+                              >
+                                <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                                <span>Cancel Booking</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Bottom Grid: Account Summary + Profile Editor */}
         <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12">
-          {/* Left Column: Customer Summary + My Bookings Placeholder */}
-          <div className="space-y-6 lg:col-span-5">
-            {/* Customer Summary Card */}
+          <div className="lg:col-span-4">
             <section className="rounded-2xl border border-slate-200 bg-white p-6">
               <div className="flex items-center gap-3">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#0B1F3A] text-white">
@@ -194,31 +513,9 @@ export function DashboardPage() {
                 </div>
               </dl>
             </section>
-
-            {/* My Bookings Placeholder Card */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-6">
-              <div className="flex items-center gap-2.5">
-                <CalendarClock className="h-5 w-5 text-[#1D4ED8]" aria-hidden="true" />
-                <h2 className="font-display text-lg font-bold text-[#0B1F3A]">My Bookings</h2>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-slate-600">
-                Online booking history and reservation management will be enabled in the next phase. Meanwhile, browse
-                available self-drive vehicles or inquire via WhatsApp.
-              </p>
-              <div className="mt-5">
-                <Link
-                  to="/cars"
-                  className="inline-flex min-h-[42px] items-center gap-2 rounded-lg bg-[#0B1F3A] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
-                >
-                  <CarFront className="h-4 w-4" aria-hidden="true" />
-                  <span>Browse Available Cars</span>
-                </Link>
-              </div>
-            </section>
           </div>
 
-          {/* Right Column: Personal Profile Editor */}
-          <div className="lg:col-span-7">
+          <div className="lg:col-span-8">
             <section className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
               <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Profile Information</h2>
               <p className="mt-1 text-sm text-slate-600">

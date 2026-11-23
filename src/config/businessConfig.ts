@@ -5,6 +5,9 @@ export const BUSINESS_CONFIG = {
   state: 'Telangana',
   country: 'India',
   serviceArea: 'Siddipet, Telangana, India',
+  timezone: 'Asia/Kolkata',
+  hubPickupLabel: 'Siddipet Self Drive Hub, Siddipet, TS',
+  doorstepDeliveryFee: 250,
   /**
    * Configure your WhatsApp business number via VITE_WHATSAPP_NUMBER in .env
    * (include country code without '+', e.g. '9198XXXXXXXX')
