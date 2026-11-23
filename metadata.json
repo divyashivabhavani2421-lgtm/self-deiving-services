@@ -1,0 +1,6 @@
+{
+  "name": "Siddipet Self Drive Cars",
+  "description": "Affordable self drive car rentals in Siddipet, Telangana, India. Browse Swift, Baleno, Hyundai i20, and more.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
