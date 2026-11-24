@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  ShieldCheck,
   Trash2,
 } from 'lucide-react';
 import { BUSINESS_CONFIG } from '../../config/businessConfig';
@@ -25,6 +26,7 @@ import { deleteVehicle, updateVehicle } from '../../services/vehiclesService';
 import { Vehicle } from '../../types/vehicle';
 import { formatINR } from '../../utils/rentalUtils';
 import { AdminBookingsManager } from '../../components/admin/AdminBookingsManager';
+import { AdminUsersManager } from '../../components/admin/AdminUsersManager';
 import { VehicleForm } from '../../components/admin/VehicleForm';
 import { VehicleImagesManager } from '../../components/admin/VehicleImagesManager';
 import { VehicleImage } from '../../components/VehicleImage';
@@ -38,6 +40,7 @@ type AdminSection =
   | 'edit'
   | 'images'
   | 'pricing'
+  | 'admins'
   | 'settings';
 
 const SIDEBAR_ITEMS: { id: AdminSection; label: string; icon: typeof LayoutDashboard }[] = [
@@ -47,6 +50,7 @@ const SIDEBAR_ITEMS: { id: AdminSection; label: string; icon: typeof LayoutDashb
   { id: 'add', label: 'Add Vehicle', icon: Plus },
   { id: 'images', label: 'Vehicle Images', icon: ImageIcon },
   { id: 'pricing', label: 'Rental Pricing', icon: IndianRupee },
+  { id: 'admins', label: 'Admin Management', icon: ShieldCheck },
   { id: 'settings', label: 'Business Settings', icon: Settings },
 ];
 
@@ -196,7 +200,7 @@ export function AdminDashboardPage() {
 
   const handleAdminLogout = async () => {
     await signOut();
-    navigate('/login', { replace: true });
+    navigate('/admin/login', { replace: true });
   };
 
   const adminName = profile?.fullName || user?.email || 'Administrator';
@@ -624,6 +628,9 @@ export function AdminDashboardPage() {
               {/* MANAGE BOOKINGS */}
               {activeSection === 'bookings' && <AdminBookingsManager />}
 
+              {/* ADMINISTRATOR MANAGEMENT */}
+              {activeSection === 'admins' && <AdminUsersManager />}
+
               {/* 7. RENTAL PRICING */}
               {activeSection === 'pricing' && (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -737,10 +744,8 @@ export function AdminDashboardPage() {
                       </div>
                       <div>
                         <dt className="text-xs text-slate-500">WhatsApp Inquiry Number</dt>
-                        <dd className="font-medium text-slate-700">
-                          {BUSINESS_CONFIG.whatsappNumber
-                            ? 'Configured via VITE_WHATSAPP_NUMBER'
-                            : 'Not set yet (configure VITE_WHATSAPP_NUMBER in AI Studio Secrets)'}
+                        <dd className="font-semibold text-[#0B1F3A] tabular-nums">
+                          {BUSINESS_CONFIG.whatsappDisplayNumber} (+91)
                         </dd>
                       </div>
                       <div>

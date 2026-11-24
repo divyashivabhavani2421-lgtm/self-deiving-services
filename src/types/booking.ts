@@ -27,9 +27,18 @@ export interface CreateBookingInput {
   notes?: string;
 }
 
+export interface CreateGuestBookingInput extends CreateBookingInput {
+  guestName: string;
+  guestPhone: string;
+}
+
 export interface BookingRecord {
   id: string;
-  userId: string;
+  bookingReference?: string;
+  userId: string | null;
+  isGuest?: boolean;
+  guestName?: string;
+  guestPhone?: string;
   vehicleId: string;
   startDate: string;
   endDate: string;

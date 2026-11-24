@@ -1,7 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, Fuel, Settings2, Users } from 'lucide-react';
 import { Vehicle } from '../types/vehicle';
-import { formatINR } from '../utils/rentalUtils';
 import { VehicleImage } from './VehicleImage';
 
 interface VehicleCardProps {
@@ -58,33 +57,21 @@ export function VehicleCard({ vehicle, searchQuery = '' }: VehicleCardProps) {
           </div>
         </dl>
 
-        {/* 24h & 12h Prices + View Details */}
-        <div className="mt-auto flex items-center justify-between gap-4 pt-5">
-          <div>
-            {vehicle.price24h !== null ? (
-              <div>
-                <div>
-                  <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
-                    {formatINR(vehicle.price24h)}
-                  </span>
-                  <span className="text-xs font-medium text-slate-500"> / 24h</span>
-                </div>
-                {vehicle.price12h !== null && (
-                  <div className="mt-0.5 text-xs font-medium text-slate-500 tabular-nums">
-                    12h: {formatINR(vehicle.price12h)}
-                  </div>
-                )}
-              </div>
-            ) : vehicle.price12h !== null ? (
-              <div>
-                <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
-                  {formatINR(vehicle.price12h)}
-                </span>
-                <span className="text-xs font-medium text-slate-500"> / 12h</span>
-              </div>
-            ) : (
-              <span className="text-sm font-medium text-slate-600">Contact for rate</span>
-            )}
+        {/* Starting Price Display + View Details */}
+        <div className="mt-auto flex items-center justify-between gap-3 pt-5">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-[#1D4ED8]">Starting from</div>
+            <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1">
+              <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
+                ₹999
+              </span>
+              <span className="text-xs font-medium text-slate-600 whitespace-nowrap">
+                / 12 Hours
+              </span>
+            </div>
+            <p className="mt-0.5 text-[11px] leading-tight text-slate-500">
+              Starting price · Check details for exact rate
+            </p>
           </div>
 
           <Link

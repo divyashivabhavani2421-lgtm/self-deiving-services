@@ -5,6 +5,7 @@ import {
   BookingRecord,
   BookingStatus,
   CreateBookingInput,
+  CreateGuestBookingInput,
   PickupType,
   RentalDurationType,
 } from '../types/booking';
@@ -26,6 +27,16 @@ function readNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
+function readBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+  }
+  return fallback;
+}
+
 function normalizeStatus(value: unknown): BookingStatus {
   const s = readString(value).toLowerCase();
   if (s === 'confirmed' || s === 'completed' || s === 'cancelled') return s;
@@ -43,15 +54,24 @@ function normalizePickupType(value: unknown): PickupType {
   return s === 'doorstep_delivery' ? 'doorstep_delivery' : 'hub_pickup';
 }
 
+function formatFallbackReference(id: string): string {
+  return id ? `SSDC-${id.slice(0, 8).toUpperCase()}` : '';
+}
+
 function mapBookingRow(row: RawRow): BookingRecord {
   const vehicleObj = (row.vehicles as RawRow | null | undefined) ?? null;
   const make = readString(row.vehicle_brand ?? vehicleObj?.make);
   const model = readString(row.vehicle_model ?? vehicleObj?.model);
   const combinedMakeModel = [make, model].filter(Boolean).join(' ').trim();
+  const id = readString(row.id ?? row.booking_id);
 
   return {
-    id: readString(row.id),
-    userId: readString(row.user_id),
+    id,
+    bookingReference: readString(row.booking_reference) || formatFallbackReference(id) || undefined,
+    userId: readString(row.user_id) || null,
+    isGuest: readBoolean(row.is_guest, false),
+    guestName: readString(row.guest_name) || undefined,
+    guestPhone: readString(row.guest_phone) || undefined,
     vehicleId: readString(row.vehicle_id),
     startDate: readString(row.start_date),
     endDate: readString(row.end_date),
@@ -81,12 +101,18 @@ function mapBookingRow(row: RawRow): BookingRecord {
 function mapAdminBookingRow(row: RawRow): AdminBookingRecord {
   const base = mapBookingRow(row);
   const profileObj = (row.profiles as RawRow | null | undefined) ?? null;
+  const isGuest = base.isGuest || Boolean(base.guestName || base.guestPhone);
 
   return {
     ...base,
-    customerName: readString(row.customer_name ?? profileObj?.full_name) || 'Registered Customer',
-    customerPhone: readString(row.customer_phone ?? profileObj?.phone) || '—',
-    customerEmail: readString(row.customer_email) || '',
+    isGuest,
+    customerName: isGuest
+      ? readString(row.customer_name ?? row.guest_name) || 'Guest Customer'
+      : readString(row.customer_name ?? profileObj?.full_name) || 'Registered Customer',
+    customerPhone: isGuest
+      ? readString(row.customer_phone ?? row.guest_phone) || '—'
+      : readString(row.customer_phone ?? profileObj?.phone) || '—',
+    customerEmail: isGuest ? '' : readString(row.customer_email) || '',
   };
 }
 
@@ -110,7 +136,10 @@ function formatBookingError(
   const lower = msg.toLowerCase();
 
   if (isRpcMissingError(error)) {
-    return 'Booking database functions are not deployed yet. Please run supabase/migrations/phase5_booking_system.sql in your Supabase SQL Editor.';
+    if (lower.includes('create_guest_booking')) {
+      return 'Guest booking database function is not deployed yet. Please run supabase/migrations/step4_guest_bookings.sql in your Supabase SQL Editor.';
+    }
+    return 'Booking database functions are not deployed yet. Please run the latest SQL migration in your Supabase SQL Editor.';
   }
   if (error.code === '23P01' || lower.includes('overlapping') || lower.includes('already reserved')) {
     return msg;
@@ -194,7 +223,50 @@ export async function fetchVehicleBookedSlots(
 }
 
 /**
- * Creates a pending booking atomically on the database side.
+ * Creates a pending guest booking atomically on the database side without requiring login.
+ * Duration, pricing, delivery fee, active vehicle, overlap lock, and `pending` status
+ * are strictly validated and computed inside PostgreSQL.
+ */
+export async function createGuestBooking(
+  input: CreateGuestBookingInput
+): Promise<{ booking: BookingRecord | null; error: string | null }> {
+  if (!supabase) {
+    return { booking: null, error: getMissingConfigError() };
+  }
+
+  const { data, error } = await supabase.rpc('create_guest_booking', {
+    p_vehicle_id: input.vehicleId,
+    p_guest_name: input.guestName.trim(),
+    p_guest_phone: input.guestPhone.trim(),
+    p_start_date: input.startDateIso,
+    p_end_date: input.endDateIso,
+    p_rental_duration: input.rentalDuration,
+    p_pickup_type: input.pickupType,
+    p_delivery_address:
+      input.pickupType === 'doorstep_delivery' ? (input.deliveryAddress?.trim() || null) : null,
+    p_notes: input.notes?.trim() || null,
+  });
+
+  if (error) {
+    return {
+      booking: null,
+      error: formatBookingError(error, 'Could not submit your booking request. Please try again.'),
+    };
+  }
+
+  const row = Array.isArray(data) ? (data[0] as RawRow | undefined) : (data as RawRow | null);
+  if (!row) {
+    return {
+      booking: null,
+      error: 'Booking request did not return a confirmation record.',
+    };
+  }
+
+  return { booking: mapBookingRow(row), error: null };
+}
+
+/**
+ * Creates a pending booking for an authenticated user atomically on the database side.
  * user_id, duration_hours, base_amount, delivery_fee, total_amount, and status
  * are enforced & computed in PostgreSQL — never trusted from the browser.
  */
@@ -244,7 +316,7 @@ export async function createBooking(
 }
 
 /**
- * Fetches ONLY the signed-in customer's own bookings.
+ * Fetches ONLY the signed-in customer's own non-guest bookings.
  */
 export async function fetchMyBookings(
   userId: string
@@ -265,7 +337,7 @@ export async function fetchMyBookings(
     return { bookings: [], error: rpcRes.error.message };
   }
 
-  // Graceful fallback to direct RLS-protected table select if Phase 5 RPC is not run yet
+  // Graceful fallback to direct RLS-protected table select if RPC is not run yet
   const fallbackRes = await supabase
     .from('bookings')
     .select('*, vehicles(id, make, model, image_url, fuel_type, transmission, registration_number)')
@@ -278,7 +350,7 @@ export async function fetchMyBookings(
 
   const rows = Array.isArray(fallbackRes.data) ? (fallbackRes.data as RawRow[]) : [];
   return {
-    bookings: rows.map(mapBookingRow),
+    bookings: rows.filter((r) => !readBoolean(r.is_guest, false)).map(mapBookingRow),
     error: null,
   };
 }
@@ -337,7 +409,7 @@ export async function cancelOwnBooking(
 }
 
 /**
- * Fetches all bookings for authorized administrators.
+ * Fetches all bookings (both authenticated customer & guest bookings) for authorized administrators.
  */
 export async function fetchAllBookingsAdmin(): Promise<{
   bookings: AdminBookingRecord[];

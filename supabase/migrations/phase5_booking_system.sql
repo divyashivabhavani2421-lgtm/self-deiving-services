@@ -55,13 +55,11 @@ DECLARE
   v_vehicle record;
   v_elapsed_seconds numeric;
   v_duration_hours integer;
-  v_full_days integer;
-  v_extra_hours integer;
+  v_custom_days integer;
   v_raw_12h numeric;
   v_raw_24h numeric;
   v_effective_12h numeric;
   v_effective_24h numeric;
-  v_rem_amount numeric;
   v_base_amount numeric;
   v_delivery_fee numeric;
   v_is_admin boolean;
@@ -116,7 +114,7 @@ BEGIN
       RAISE EXCEPTION 'Pickup date and time cannot be in the past.';
     END IF;
 
-    -- Exact elapsed duration validation (do not rely on CEIL for minimum or exact presets)
+    -- Exact elapsed duration validation (minimum 12 hours remains enforced)
     v_elapsed_seconds := EXTRACT(EPOCH FROM (NEW.end_date - NEW.start_date));
 
     IF v_elapsed_seconds < 43200 THEN
@@ -135,8 +133,18 @@ BEGIN
       RAISE EXCEPTION '24h rental option requires exactly 24 elapsed hours between pickup and return.';
     END IF;
 
-    -- Billing duration rounds any partial extra hour up to the next whole billable hour
-    v_duration_hours := CEIL(v_elapsed_seconds / 3600.0)::integer;
+    IF NEW.rental_duration = 'custom' THEN
+      IF v_elapsed_seconds < 86400
+         OR v_elapsed_seconds > (30 * 86400)
+         OR v_elapsed_seconds <> ROUND(v_elapsed_seconds)
+         OR MOD(ROUND(v_elapsed_seconds)::bigint, 86400) <> 0 THEN
+        RAISE EXCEPTION 'Custom day-wise rentals must be between 1 and 30 full days (in 24-hour increments from pickup time).';
+      END IF;
+      v_custom_days := (ROUND(v_elapsed_seconds)::bigint / 86400)::integer;
+      v_duration_hours := v_custom_days * 24;
+    ELSE
+      v_duration_hours := CEIL(v_elapsed_seconds / 3600.0)::integer;
+    END IF;
 
     IF NEW.pickup_type NOT IN ('hub_pickup', 'doorstep_delivery') THEN
       RAISE EXCEPTION 'Invalid pickup_type. Allowed: hub_pickup, doorstep_delivery.';
@@ -178,30 +186,13 @@ BEGIN
     v_effective_12h := CASE WHEN v_raw_12h > 0 THEN v_raw_12h ELSE ROUND(v_raw_24h * 0.5, 2) END;
     v_effective_24h := CASE WHEN v_raw_24h > 0 THEN v_raw_24h ELSE ROUND(v_raw_12h * 2.0, 2) END;
 
-    v_full_days := v_duration_hours / 24;
-    v_extra_hours := MOD(v_duration_hours, 24);
-
     IF NEW.rental_duration = '12h' AND v_duration_hours = 12 THEN
       v_base_amount := ROUND(v_effective_12h, 2);
     ELSIF NEW.rental_duration = '24h' AND v_duration_hours = 24 THEN
       v_base_amount := ROUND(v_effective_24h, 2);
     ELSE
-      -- Custom pricing based strictly on price_12h and price_24h:
-      --   * Complete 24h blocks billed at price_24h each
-      --   * Remainder 1..12 hrs billed pro-rata from price_12h (so +12h = exact price_12h)
-      --   * Remainder 13..23 hrs billed as price_12h + pro-rata share of (price_24h - price_12h),
-      --     capped at price_24h per partial day.
-      IF v_extra_hours = 0 THEN
-        v_rem_amount := 0;
-      ELSIF v_extra_hours <= 12 THEN
-        v_rem_amount := LEAST((v_effective_12h / 12.0) * v_extra_hours, v_effective_24h);
-      ELSE
-        v_rem_amount := LEAST(
-          v_effective_12h + (GREATEST(v_effective_24h - v_effective_12h, 0) / 12.0) * (v_extra_hours - 12),
-          v_effective_24h
-        );
-      END IF;
-      v_base_amount := ROUND((v_full_days * v_effective_24h) + v_rem_amount, 2);
+      -- Custom day-wise (1 to 30 days): number of days multiplied by price_24h
+      v_base_amount := ROUND(v_custom_days * v_effective_24h, 2);
     END IF;
 
     NEW.duration_hours := v_duration_hours;

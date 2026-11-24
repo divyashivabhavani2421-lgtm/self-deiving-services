@@ -17,9 +17,10 @@ export function Navbar() {
   const navigate = useNavigate();
 
   const handleLogout = async () => {
+    const wasAdmin = isAdmin;
     setMobileMenuOpen(false);
     await signOut();
-    navigate('/login', { replace: true });
+    navigate(wasAdmin ? '/admin/login' : '/', { replace: true });
   };
 
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -93,21 +94,11 @@ export function Navbar() {
             </div>
           ) : (
             <div className="hidden md:flex items-center gap-4">
-              <NavLink
-                to="/login"
-                className={({ isActive }) =>
-                  `text-sm font-medium whitespace-nowrap shrink-0 transition-colors duration-150 ${
-                    isActive ? 'text-[#1D4ED8]' : 'text-slate-700 hover:text-[#0B1F3A]'
-                  }`
-                }
-              >
-                Login
-              </NavLink>
               <Link
-                to="/register"
+                to="/cars"
                 className="rounded-lg bg-[#0B1F3A] px-4 py-2 text-sm font-semibold text-white transition-colors duration-150 hover:bg-[#1D4ED8] whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8]"
               >
-                Register
+                Book a Car
               </Link>
             </div>
           )}
@@ -180,20 +171,13 @@ export function Navbar() {
               </button>
             </div>
           ) : (
-            <div className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
+            <div className="mt-4 border-t border-slate-100 pt-4">
               <Link
-                to="/login"
+                to="/cars"
                 onClick={() => setMobileMenuOpen(false)}
-                className="flex min-h-[44px] items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-[#0B1F3A] transition-colors hover:bg-slate-50"
+                className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-[#0B1F3A] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
               >
-                Login
-              </Link>
-              <Link
-                to="/register"
-                onClick={() => setMobileMenuOpen(false)}
-                className="flex min-h-[44px] items-center justify-center rounded-lg bg-[#0B1F3A] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
-              >
-                Register
+                Book a Car
               </Link>
             </div>
           )}

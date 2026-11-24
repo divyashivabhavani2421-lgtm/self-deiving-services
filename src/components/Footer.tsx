@@ -79,15 +79,15 @@ export function Footer() {
             </ul>
           </div>
 
-          {/* Account & Direct Inquiry */}
+          {/* Instant Booking & Admin Access */}
           <div className="space-y-4">
-            <h2 className="font-display text-sm font-semibold text-white">Customer Access</h2>
+            <h2 className="font-display text-sm font-semibold text-white">Booking &amp; Support</h2>
             <ul className="space-y-2.5 text-sm">
               {user ? (
                 <>
                   <li>
                     <Link to="/dashboard" className="transition-colors hover:text-white">
-                      Customer Dashboard
+                      Account Dashboard
                     </Link>
                   </li>
                   <li>
@@ -103,13 +103,13 @@ export function Footer() {
               ) : (
                 <>
                   <li>
-                    <Link to="/login" className="transition-colors hover:text-white">
-                      Customer Login
+                    <Link to="/cars" className="transition-colors hover:text-white">
+                      Book Without Account
                     </Link>
                   </li>
                   <li>
-                    <Link to="/register" className="transition-colors hover:text-white">
-                      Create Account
+                    <Link to="/contact" className="transition-colors hover:text-white">
+                      Pickup &amp; Trip Inquiry
                     </Link>
                   </li>
                 </>
@@ -117,7 +117,8 @@ export function Footer() {
             </ul>
             <div className="pt-2">
               <WhatsAppButton
-                label="WhatsApp Inquiry"
+                label={`WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
+                phoneNumber="917013647034"
                 variant="primary"
                 className="w-full sm:w-auto"
               />

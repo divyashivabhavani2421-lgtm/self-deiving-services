@@ -3,7 +3,7 @@ import { Session, User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   CustomerProfile,
-  fetchOwnProfile,
+  ensureCustomerProfile,
   isAdminRoleValue,
 } from '../services/profileService';
 
@@ -20,7 +20,7 @@ interface AuthContextValue {
   authError: string | null;
   clearAuthNotices: () => void;
   clearRecoveryMode: () => void;
-  refreshProfile: () => Promise<CustomerProfile | null>;
+  refreshProfile: (overrideUser?: User | null) => Promise<CustomerProfile | null>;
   setProfileState: (next: CustomerProfile | null) => void;
   signOut: () => Promise<void>;
 }
@@ -57,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfileLoading(true);
       setProfileError(null);
       try {
-        const result = await fetchOwnProfile(activeUser);
+        const result = await ensureCustomerProfile(activeUser);
         setProfile(result.profile);
         setProfileError(result.error);
         return result.profile;
@@ -68,10 +68,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const refreshProfile = useCallback(async (): Promise<CustomerProfile | null> => {
-    if (!user) return null;
-    return loadProfileForUser(user);
-  }, [user, loadProfileForUser]);
+  const refreshProfile = useCallback(
+    async (overrideUser?: User | null): Promise<CustomerProfile | null> => {
+      if (overrideUser) {
+        return loadProfileForUser(overrideUser);
+      }
+      if (user) {
+        return loadProfileForUser(user);
+      }
+      if (!supabase) return null;
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) return null;
+      return loadProfileForUser(data.user);
+    },
+    [user, loadProfileForUser]
+  );
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
@@ -166,6 +177,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } = client.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
 
+      if (event === 'INITIAL_SESSION') {
+        return;
+      }
+
       if (event === 'PASSWORD_RECOVERY') {
         setIsRecoveryMode(true);
       }
@@ -175,6 +190,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null);
         setUser(null);
         setProfile(null);
+        setProfileError(null);
         return;
       }
 

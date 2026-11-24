@@ -57,7 +57,9 @@ function mapProfileRow(
 ): CustomerProfile {
   const columns = Object.keys(row);
   const metaFullName = readString(user.user_metadata?.full_name ?? user.user_metadata?.name);
-  const metaPhone = readString(user.user_metadata?.phone ?? user.user_metadata?.phone_number);
+  const metaPhone = readString(
+    user.phone ?? user.user_metadata?.phone ?? user.user_metadata?.phone_number
+  );
 
   const fullName =
     readString(row.full_name) ||
@@ -106,7 +108,7 @@ function buildFallbackProfileFromAuth(user: User): CustomerProfile {
     id: user.id,
     fullName: readString(user.user_metadata?.full_name ?? user.user_metadata?.name),
     email: user.email || '',
-    phone: readString(user.user_metadata?.phone ?? user.user_metadata?.phone_number),
+    phone: readString(user.phone ?? user.user_metadata?.phone ?? user.user_metadata?.phone_number),
     availableColumns: [],
     idColumn: 'id',
   };
@@ -179,6 +181,130 @@ export async function fetchOwnProfile(user: User): Promise<ProfileResult> {
   };
 }
 
+/**
+ * Ensures a row exists in `public.profiles` after OTP or session login.
+ * - If a profile already exists, preserves its `full_name`, `phone`, and `role`
+ *   (NEVER overwrites an existing `admin` role or existing profile fields).
+ * - If no profile exists yet, creates a `'customer'` profile for `user.id` and
+ *   verified phone number.
+ */
+export async function ensureCustomerProfile(
+  user: User,
+  options?: { fullName?: string; phone?: string }
+): Promise<ProfileResult> {
+  if (!supabase) {
+    return {
+      profile: buildFallbackProfileFromAuth(user),
+      error: 'Supabase is not configured.',
+    };
+  }
+
+  const existingQuery = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (existingQuery.error) {
+    // Fallback check if `profiles` uses `user_id` instead of `id`
+    const errMsg = existingQuery.error.message || '';
+    if (errMsg.toLowerCase().includes('profiles.id') || errMsg.toLowerCase().includes('column "id"')) {
+      return fetchOwnProfile(user);
+    }
+    return {
+      profile: buildFallbackProfileFromAuth(user),
+      error: existingQuery.error.message,
+    };
+  }
+
+  // Existing profile found: preserve full_name, phone, and role untouched
+  if (existingQuery.data) {
+    const existingRow = existingQuery.data as RawProfileRow;
+    const verifiedPhone = readString(user.phone) || readString(options?.phone);
+    const existingPhone = readString(existingRow.phone);
+
+    // Only fill phone if currently blank on the existing row; never modify role or full_name
+    if (!existingPhone && verifiedPhone) {
+      const { data: backfilled } = await supabase
+        .from('profiles')
+        .update({ phone: verifiedPhone })
+        .eq('id', user.id)
+        .select('*')
+        .maybeSingle();
+
+      if (backfilled) {
+        return {
+          profile: mapProfileRow(backfilled as RawProfileRow, user, 'id'),
+          error: null,
+        };
+      }
+    }
+
+    return {
+      profile: mapProfileRow(existingRow, user, 'id'),
+      error: null,
+    };
+  }
+
+  // No profile exists yet -> create a new 'customer' profile (never admin)
+  const resolvedPhone =
+    readString(user.phone) ||
+    readString(options?.phone) ||
+    readString(user.user_metadata?.phone ?? user.user_metadata?.phone_number);
+
+  const resolvedFullName =
+    readString(options?.fullName) ||
+    readString(user.user_metadata?.full_name ?? user.user_metadata?.name) ||
+    '';
+
+  const insertPayload: Record<string, unknown> = {
+    id: user.id,
+    full_name: resolvedFullName,
+    phone: resolvedPhone,
+    role: 'customer',
+  };
+
+  const insertRes = await supabase
+    .from('profiles')
+    .insert(insertPayload)
+    .select('*')
+    .maybeSingle();
+
+  if (!insertRes.error && insertRes.data) {
+    return {
+      profile: mapProfileRow(insertRes.data as RawProfileRow, user, 'id'),
+      error: null,
+    };
+  }
+
+  // Fallback to SECURITY DEFINER RPC if direct RLS insert is blocked on profiles
+  const rpcRes = await supabase.rpc('ensure_customer_profile', {
+    p_full_name: resolvedFullName || null,
+  });
+
+  if (!rpcRes.error && rpcRes.data) {
+    const row = Array.isArray(rpcRes.data)
+      ? (rpcRes.data[0] as RawProfileRow | undefined)
+      : (rpcRes.data as RawProfileRow | null);
+    if (row) {
+      return {
+        profile: mapProfileRow(row, user, 'id'),
+        error: null,
+      };
+    }
+  }
+
+  const fallbackError =
+    insertRes.error?.message ||
+    rpcRes.error?.message ||
+    'Could not create your customer profile automatically.';
+
+  return {
+    profile: buildFallbackProfileFromAuth(user),
+    error: fallbackError,
+  };
+}
+
 const ADMIN_ROLE_VALUES = new Set(['admin', 'super_admin', 'administrator']);
 
 export function isAdminRoleValue(role: string | undefined | null): boolean {
@@ -217,6 +343,49 @@ export async function verifyAdminRole(userId: string): Promise<{
     isAdmin: isAdminRoleValue(role),
     role,
     error: null,
+  };
+}
+
+/**
+ * Verifies both the live authenticated Supabase session user (`auth.getUser()`)
+ * and their current `public.profiles.role` row in Supabase without relying on
+ * cached frontend state.
+ */
+export async function verifyCurrentSessionAdminRole(): Promise<{
+  authenticated: boolean;
+  user: User | null;
+  isAdmin: boolean;
+  role: string | null;
+  error: string | null;
+}> {
+  if (!supabase) {
+    return {
+      authenticated: false,
+      user: null,
+      isAdmin: false,
+      role: null,
+      error: 'Supabase is not configured.',
+    };
+  }
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) {
+    return {
+      authenticated: false,
+      user: null,
+      isAdmin: false,
+      role: null,
+      error: null,
+    };
+  }
+
+  const roleCheck = await verifyAdminRole(userData.user.id);
+  return {
+    authenticated: true,
+    user: userData.user,
+    isAdmin: roleCheck.isAdmin,
+    role: roleCheck.role,
+    error: roleCheck.error,
   };
 }
 
@@ -322,3 +491,127 @@ export async function updateOwnProfile(
   // Re-fetch to reflect latest state
   return fetchOwnProfile(authUpdate.data.user ?? user);
 }
+
+export interface AdminManagedAccount {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  role: string;
+  isAdmin: boolean;
+  createdAt: string | null;
+}
+
+function mapAdminManagedAccount(row: RawProfileRow): AdminManagedAccount {
+  const role = readString(row.role) || 'customer';
+  return {
+    id: readString(row.id),
+    fullName: readString(row.full_name),
+    email: readString(row.email),
+    phone: readString(row.phone),
+    role,
+    isAdmin: isAdminRoleValue(role),
+    createdAt: readString(row.created_at) || null,
+  };
+}
+
+/**
+ * Lists registered accounts and administrators via the verified admin-only RPC
+ * `admin_list_profiles()`. Rejected at database level for non-admins.
+ */
+export async function listAdminAccounts(): Promise<{
+  accounts: AdminManagedAccount[];
+  error: string | null;
+}> {
+  if (!supabase) {
+    return { accounts: [], error: 'Supabase is not configured.' };
+  }
+
+  const { data, error } = await supabase.rpc('admin_list_profiles');
+
+  if (error) {
+    const msg = error.message || '';
+    if (
+      error.code === '42883' ||
+      error.code === 'PGRST202' ||
+      msg.toLowerCase().includes('could not find the function') ||
+      msg.toLowerCase().includes('admin_list_profiles')
+    ) {
+      return {
+        accounts: [],
+        error:
+          'Administrator management functions are not active in Supabase yet. Run supabase/migrations/step5_admin_management.sql in Supabase SQL Editor.',
+      };
+    }
+    return {
+      accounts: [],
+      error: msg || 'Could not load administrator and registered account records.',
+    };
+  }
+
+  const rows = Array.isArray(data) ? (data as RawProfileRow[]) : [];
+  return {
+    accounts: rows.map(mapAdminManagedAccount),
+    error: null,
+  };
+}
+
+/**
+ * Promotes an existing registered account to `'admin'` via the verified admin-only RPC
+ * `admin_promote_user_to_admin(p_email)`. Never creates new users or allows customer self-promotion.
+ */
+export async function promoteRegisteredAccountToAdmin(email: string): Promise<{
+  account: AdminManagedAccount | null;
+  error: string | null;
+}> {
+  if (!supabase) {
+    return { account: null, error: 'Supabase is not configured.' };
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailPattern.test(normalizedEmail)) {
+    return { account: null, error: 'Please enter a valid registered email address.' };
+  }
+
+  const { data, error } = await supabase.rpc('admin_promote_user_to_admin', {
+    p_email: normalizedEmail,
+  });
+
+  if (error) {
+    const msg = error.message || '';
+    if (
+      error.code === '42883' ||
+      error.code === 'PGRST202' ||
+      msg.toLowerCase().includes('could not find the function') ||
+      msg.toLowerCase().includes('admin_promote_user_to_admin')
+    ) {
+      return {
+        account: null,
+        error:
+          'Administrator management functions are not active in Supabase yet. Run supabase/migrations/step5_admin_management.sql in Supabase SQL Editor.',
+      };
+    }
+    return {
+      account: null,
+      error: msg || 'Could not promote account to administrator.',
+    };
+  }
+
+  const row = Array.isArray(data)
+    ? (data[0] as RawProfileRow | undefined)
+    : (data as RawProfileRow | null);
+
+  if (!row) {
+    return {
+      account: null,
+      error: 'Account promotion completed, but no updated account row was returned.',
+    };
+  }
+
+  return {
+    account: mapAdminManagedAccount(row),
+    error: null,
+  };
+}
+

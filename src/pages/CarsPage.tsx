@@ -201,6 +201,7 @@ export function CarsPage() {
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-slate-600 sm:text-base">
               Browse inspected hatchbacks and compact SUVs ready for self-drive pickup in Siddipet, Telangana.
+              Starting from ₹999 / 12 Hours — select any vehicle to view its exact 12-hour and 24-hour tariff.
             </p>
           </div>
 

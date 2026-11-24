@@ -8,12 +8,13 @@ export const BUSINESS_CONFIG = {
   timezone: 'Asia/Kolkata',
   hubPickupLabel: 'Siddipet Self Drive Hub, Siddipet, TS',
   doorstepDeliveryFee: 250,
+  whatsappDisplayNumber: '7013647034',
   /**
-   * Configure your WhatsApp business number via VITE_WHATSAPP_NUMBER in .env
-   * (include country code without '+', e.g. '9198XXXXXXXX')
-   * or update the fallback string below when deploying.
+   * Uses VITE_WHATSAPP_NUMBER when configured, defaulting to the business
+   * WhatsApp number 7013647034 (+91).
    */
-  whatsappNumber: (import.meta.env.VITE_WHATSAPP_NUMBER as string | undefined)?.trim() || '',
+  whatsappNumber:
+    (import.meta.env.VITE_WHATSAPP_NUMBER as string | undefined)?.trim() || '917013647034',
 } as const;
 
 export function sanitizePhoneForWhatsApp(rawNumber: string): string {

@@ -12,7 +12,7 @@ import {
   updateBookingStatusAdmin,
 } from '../../services/bookingsService';
 import { AdminBookingRecord, BookingStatus } from '../../types/booking';
-import { formatDurationLabel, formatINR, formatISTDateTime } from '../../utils/rentalUtils';
+import { formatBookingDurationLabel, formatINR, formatISTDateTime } from '../../utils/rentalUtils';
 
 type StatusFilter = 'all' | BookingStatus;
 
@@ -69,6 +69,7 @@ export function AdminBookingsManager() {
       if (q) {
         const matches =
           b.id.toLowerCase().includes(q) ||
+          (b.bookingReference || '').toLowerCase().includes(q) ||
           b.customerName.toLowerCase().includes(q) ||
           b.customerPhone.toLowerCase().includes(q) ||
           b.customerEmail.toLowerCase().includes(q) ||
@@ -105,8 +106,9 @@ export function AdminBookingsManager() {
         setError(res.error);
         return;
       }
+      const refLabel = booking.bookingReference || `#${booking.id.slice(0, 8).toUpperCase()}`;
       setNotice(
-        `Booking #${booking.id.slice(0, 8).toUpperCase()} (${booking.vehicleName || 'Vehicle'}) updated to ${nextStatus}.`
+        `Booking ${refLabel} (${booking.vehicleName || 'Vehicle'}) updated to ${nextStatus}.`
       );
       await loadBookings();
     } finally {
@@ -236,12 +238,20 @@ export function AdminBookingsManager() {
                 {filteredBookings.map((booking) => {
                   const statusMeta = STATUS_LABEL[booking.status];
                   const isBusy = busyBookingId === booking.id;
-                  const shortId = booking.id.slice(0, 8).toUpperCase();
+                  const refCode =
+                    booking.bookingReference || `#${booking.id.slice(0, 8).toUpperCase()}`;
 
                   return (
                     <tr key={booking.id} className="align-top hover:bg-slate-50/70">
                       <td className="px-5 py-3.5">
-                        <div className="font-mono text-xs font-semibold text-[#1D4ED8]">#{shortId}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs font-semibold text-[#1D4ED8]">
+                            {refCode}
+                          </span>
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            · {booking.isGuest ? 'Guest' : 'Registered'}
+                          </span>
+                        </div>
                         <div className="mt-0.5 font-semibold text-[#0B1F3A]">{booking.customerName}</div>
                         <div className="text-xs text-slate-600 tabular-nums">{booking.customerPhone}</div>
                         {booking.customerEmail && (
@@ -277,7 +287,12 @@ export function AdminBookingsManager() {
                         <div className="font-medium text-[#0B1F3A]">{formatISTDateTime(booking.startDate)}</div>
                         <div className="mt-0.5 text-slate-500">to {formatISTDateTime(booking.endDate)}</div>
                         <div className="mt-1 font-medium text-slate-600">
-                          {formatDurationLabel(booking.durationHours)} · {booking.rentalDuration}
+                          {formatBookingDurationLabel(booking.durationHours, booking.rentalDuration)}
+                          {booking.rentalDuration === 'custom' &&
+                          booking.durationHours >= 24 &&
+                          booking.durationHours % 24 === 0
+                            ? ` · ${booking.durationHours} hrs (Custom)`
+                            : ''}
                         </div>
                       </td>
 

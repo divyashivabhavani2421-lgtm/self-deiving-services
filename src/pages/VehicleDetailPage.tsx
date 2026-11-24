@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
@@ -10,30 +10,39 @@ import {
   Gauge,
   Loader2,
   MapPin,
+  Phone,
   Settings2,
   ShieldCheck,
   Truck,
+  User as UserIcon,
   Users,
 } from 'lucide-react';
 import { BUSINESS_CONFIG } from '../config/businessConfig';
 import { useAuth } from '../context/AuthContext';
-import { createBooking, fetchVehicleBookedSlots } from '../services/bookingsService';
+import {
+  createBooking,
+  createGuestBooking,
+  fetchVehicleBookedSlots,
+} from '../services/bookingsService';
 import { listVehicleImages } from '../services/storageService';
 import { fetchVehicleBySlugOrId } from '../services/vehiclesService';
 import { BookedSlot, BookingRecord, PickupType, RentalDurationType } from '../types/booking';
 import { Vehicle } from '../types/vehicle';
+import { normalizeIndianMobileNumber } from '../utils/phoneUtils';
 import {
   addHoursInIST,
   calculateBookingPricePreview,
   calculateDurationHours,
   calculateElapsedMs,
-  formatDurationLabel,
+  formatBookingDurationLabel,
   formatINR,
   formatISTDateTime,
   getDefaultSearchParams,
   getTodayInputDate,
   hasBookingOverlap,
   HOURS_24_MS,
+  MAX_CUSTOM_DAYS,
+  MIN_CUSTOM_DAYS,
   MIN_RENTAL_HOURS,
   MIN_RENTAL_MS,
   toISTTimestampIso,
@@ -45,9 +54,7 @@ import { WhatsAppButton } from '../components/WhatsAppButton';
 export function VehicleDetailPage() {
   const { slug } = useParams<{ slug: string }>();
   const [searchParams] = useSearchParams();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
+  const { user, profile } = useAuth();
 
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [storageImages, setStorageImages] = useState<string[]>([]);
@@ -62,27 +69,45 @@ export function VehicleDetailPage() {
 
   const initialPickupDate = searchParams.get('pickupDate') || defaults.pickupDate;
   const initialPickupTime = searchParams.get('pickupTime') || defaults.pickupTime;
-  const initialReturnDate = searchParams.get('returnDate') || defaults.returnDate;
-  const initialReturnTime = searchParams.get('returnTime') || defaults.returnTime;
+  const initialReturnDateParam = searchParams.get('returnDate') || defaults.returnDate;
+  const initialReturnTimeParam = searchParams.get('returnTime') || defaults.returnTime;
 
   const initialElapsedMs = calculateElapsedMs({
     pickupDate: initialPickupDate,
     pickupTime: initialPickupTime,
-    returnDate: initialReturnDate,
-    returnTime: initialReturnTime,
+    returnDate: initialReturnDateParam,
+    returnTime: initialReturnTimeParam,
   });
 
-  const [pickupDate, setPickupDate] = useState(initialPickupDate);
-  const [pickupTime, setPickupTime] = useState(initialPickupTime);
-  const [returnDate, setReturnDate] = useState(initialReturnDate);
-  const [returnTime, setReturnTime] = useState(initialReturnTime);
-  const [rentalDuration, setRentalDuration] = useState<RentalDurationType>(
+  const initialDurationMode: RentalDurationType =
     initialElapsedMs === MIN_RENTAL_MS
       ? '12h'
-      : initialElapsedMs === HOURS_24_MS
+      : initialElapsedMs === HOURS_24_MS || initialElapsedMs === null
         ? '24h'
-        : 'custom'
+        : 'custom';
+
+  const initialCustomDays =
+    initialDurationMode === 'custom' && initialElapsedMs !== null
+      ? Math.min(MAX_CUSTOM_DAYS, Math.max(MIN_CUSTOM_DAYS, Math.ceil(initialElapsedMs / HOURS_24_MS)))
+      : MIN_CUSTOM_DAYS;
+
+  const initialSyncedReturn =
+    initialDurationMode === 'custom'
+      ? addHoursInIST(initialPickupDate, initialPickupTime, initialCustomDays * 24)
+      : null;
+
+  const [guestName, setGuestName] = useState('');
+  const [guestPhone, setGuestPhone] = useState('');
+  const [pickupDate, setPickupDate] = useState(initialPickupDate);
+  const [pickupTime, setPickupTime] = useState(initialPickupTime);
+  const [returnDate, setReturnDate] = useState(
+    initialSyncedReturn?.date || initialReturnDateParam
   );
+  const [returnTime, setReturnTime] = useState(
+    initialSyncedReturn?.time || initialReturnTimeParam
+  );
+  const [rentalDuration, setRentalDuration] = useState<RentalDurationType>(initialDurationMode);
+  const [customDays, setCustomDays] = useState<number>(initialCustomDays);
   const [pickupType, setPickupType] = useState<PickupType>('hub_pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [notes, setNotes] = useState('');
@@ -90,6 +115,13 @@ export function VehicleDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [bookingError, setBookingError] = useState('');
   const [confirmedBooking, setConfirmedBooking] = useState<BookingRecord | null>(null);
+
+  useEffect(() => {
+    if (profile) {
+      if (profile.fullName && !guestName) setGuestName(profile.fullName);
+      if (profile.phone && !guestPhone) setGuestPhone(profile.phone);
+    }
+  }, [profile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadVehicle = useCallback(async (targetSlug: string) => {
     setLoading(true);
@@ -149,42 +181,54 @@ export function VehicleDetailPage() {
     setSelectedImage(galleryImages[0] || '');
   }, [galleryImages]);
 
+  const getDurationTotalHours = (mode: RentalDurationType, daysCount: number): number => {
+    if (mode === '12h') return 12;
+    if (mode === '24h') return 24;
+    return daysCount * 24;
+  };
+
   const handleSelectDurationPreset = (preset: RentalDurationType) => {
     setRentalDuration(preset);
     setBookingError('');
-    if (preset === '12h' || preset === '24h') {
-      const hours = preset === '12h' ? 12 : 24;
-      const computed = addHoursInIST(pickupDate, pickupTime, hours);
-      if (computed) {
-        setReturnDate(computed.date);
-        setReturnTime(computed.time);
-      }
+    const hours = getDurationTotalHours(preset, customDays);
+    const computed = addHoursInIST(pickupDate, pickupTime, hours);
+    if (computed) {
+      setReturnDate(computed.date);
+      setReturnTime(computed.time);
+    }
+  };
+
+  const handleCustomDaysChange = (nextDays: number) => {
+    const clampedDays = Math.min(MAX_CUSTOM_DAYS, Math.max(MIN_CUSTOM_DAYS, nextDays));
+    setCustomDays(clampedDays);
+    setRentalDuration('custom');
+    setBookingError('');
+    const computed = addHoursInIST(pickupDate, pickupTime, clampedDays * 24);
+    if (computed) {
+      setReturnDate(computed.date);
+      setReturnTime(computed.time);
     }
   };
 
   const handlePickupDateChange = (nextDate: string) => {
     setPickupDate(nextDate);
     setBookingError('');
-    if (rentalDuration === '12h' || rentalDuration === '24h') {
-      const computed = addHoursInIST(nextDate, pickupTime, rentalDuration === '12h' ? 12 : 24);
-      if (computed) {
-        setReturnDate(computed.date);
-        setReturnTime(computed.time);
-      }
-    } else if (returnDate && nextDate > returnDate) {
-      setReturnDate(nextDate);
+    const hours = getDurationTotalHours(rentalDuration, customDays);
+    const computed = addHoursInIST(nextDate, pickupTime, hours);
+    if (computed) {
+      setReturnDate(computed.date);
+      setReturnTime(computed.time);
     }
   };
 
   const handlePickupTimeChange = (nextTime: string) => {
     setPickupTime(nextTime);
     setBookingError('');
-    if (rentalDuration === '12h' || rentalDuration === '24h') {
-      const computed = addHoursInIST(pickupDate, nextTime, rentalDuration === '12h' ? 12 : 24);
-      if (computed) {
-        setReturnDate(computed.date);
-        setReturnTime(computed.time);
-      }
+    const hours = getDurationTotalHours(rentalDuration, customDays);
+    const computed = addHoursInIST(pickupDate, nextTime, hours);
+    if (computed) {
+      setReturnDate(computed.date);
+      setReturnTime(computed.time);
     }
   };
 
@@ -229,9 +273,10 @@ export function VehicleDetailPage() {
       durationHours,
       elapsedMs,
       rentalDuration,
+      customDays: rentalDuration === 'custom' ? customDays : undefined,
       pickupType,
     });
-  }, [vehicle, durationHours, hasValidMinDuration, elapsedMs, rentalDuration, pickupType]);
+  }, [vehicle, durationHours, hasValidMinDuration, elapsedMs, rentalDuration, customDays, pickupType]);
 
   if (loading) {
     return (
@@ -294,13 +339,17 @@ export function VehicleDetailPage() {
     event.preventDefault();
     setBookingError('');
 
-    if (!user) {
-      navigate('/login', {
-        state: {
-          from: `${location.pathname}${location.search}`,
-          notice: 'Sign in to complete your car booking.',
-        },
-      });
+    const trimmedName = guestName.trim();
+    if (trimmedName.length < 2) {
+      setBookingError('Please enter your full name (at least 2 characters).');
+      return;
+    }
+
+    const parsedPhone = normalizeIndianMobileNumber(guestPhone);
+    if (!parsedPhone.valid) {
+      setBookingError(
+        parsedPhone.error || 'Please enter a valid 10-digit Indian mobile number.'
+      );
       return;
     }
 
@@ -324,6 +373,17 @@ export function VehicleDetailPage() {
       return;
     }
 
+    if (rentalDuration === 'custom') {
+      if (
+        customDays < MIN_CUSTOM_DAYS ||
+        customDays > MAX_CUSTOM_DAYS ||
+        elapsedMs !== customDays * HOURS_24_MS
+      ) {
+        setBookingError('Custom day-wise rental must be between 1 and 30 full days.');
+        return;
+      }
+    }
+
     if (overlappingSlot) {
       setBookingError(
         `This vehicle is already reserved from ${formatISTDateTime(overlappingSlot.startDate)} to ${formatISTDateTime(overlappingSlot.endDate)}. Please adjust your dates.`
@@ -345,15 +405,27 @@ export function VehicleDetailPage() {
 
     setSubmitting(true);
     try {
-      const res = await createBooking({
-        vehicleId: vehicle.id,
-        startDateIso: startIso,
-        endDateIso: endIso,
-        rentalDuration: effectiveDuration,
-        pickupType,
-        deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
-        notes: notes.trim() || undefined,
-      });
+      const res = user
+        ? await createBooking({
+            vehicleId: vehicle.id,
+            startDateIso: startIso,
+            endDateIso: endIso,
+            rentalDuration: effectiveDuration,
+            pickupType,
+            deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
+            notes: notes.trim() || undefined,
+          })
+        : await createGuestBooking({
+            vehicleId: vehicle.id,
+            guestName: trimmedName,
+            guestPhone: parsedPhone.e164,
+            startDateIso: startIso,
+            endDateIso: endIso,
+            rentalDuration: effectiveDuration,
+            pickupType,
+            deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
+            notes: notes.trim() || undefined,
+          });
 
       if (res.error || !res.booking) {
         setBookingError(res.error || 'Could not complete your booking. Please try again.');
@@ -362,7 +434,11 @@ export function VehicleDetailPage() {
         return;
       }
 
-      setConfirmedBooking(res.booking);
+      setConfirmedBooking({
+        ...res.booking,
+        guestName: res.booking.guestName || trimmedName,
+        guestPhone: res.booking.guestPhone || parsedPhone.formatted,
+      });
       const slotsRes = await fetchVehicleBookedSlots(vehicle.id);
       setBookedSlots(slotsRes.slots);
     } catch (err) {
@@ -607,40 +683,102 @@ export function VehicleDetailPage() {
                     <div className="flex items-start gap-2.5">
                       <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
                       <div>
-                        <p className="font-display font-bold text-[#0B1F3A]">Booking Request Submitted</p>
+                        <p className="font-display font-bold text-[#0B1F3A]">
+                          Booking Request Submitted
+                        </p>
                         <p className="mt-1 text-xs leading-relaxed">
-                          Your reservation is currently <strong>Pending</strong> administrator confirmation.
+                          Your request has been received and is currently{' '}
+                          <strong>Pending Admin Confirmation</strong>. This booking is not confirmed
+                          until our team reviews and confirms it.
                         </p>
                       </div>
                     </div>
 
                     <dl className="mt-4 space-y-2 border-t border-emerald-200/70 pt-3 text-xs text-[#0B1F3A]">
                       <div className="flex justify-between gap-2">
-                        <dt className="text-slate-600">Booking ID</dt>
-                        <dd className="font-mono font-semibold">{confirmedBooking.id.slice(0, 8).toUpperCase()}</dd>
+                        <dt className="text-slate-600">Booking Reference</dt>
+                        <dd className="font-mono font-bold text-[#1D4ED8]">
+                          {confirmedBooking.bookingReference ||
+                            `SSDC-${confirmedBooking.id.slice(0, 8).toUpperCase()}`}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-600">Vehicle</dt>
+                        <dd className="font-semibold text-right">
+                          {confirmedBooking.vehicleName || displayName}
+                        </dd>
+                      </div>
+                      {confirmedBooking.guestName && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="text-slate-600">Customer Name</dt>
+                          <dd className="font-medium text-right">{confirmedBooking.guestName}</dd>
+                        </div>
+                      )}
+                      {confirmedBooking.guestPhone && (
+                        <div className="flex justify-between gap-2">
+                          <dt className="text-slate-600">Mobile Number</dt>
+                          <dd className="font-medium tabular-nums text-right">
+                            {confirmedBooking.guestPhone}
+                          </dd>
+                        </div>
+                      )}
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-slate-600">Duration</dt>
+                        <dd className="font-semibold tabular-nums">
+                          {formatBookingDurationLabel(
+                            confirmedBooking.durationHours,
+                            confirmedBooking.rentalDuration
+                          )}
+                          {confirmedBooking.rentalDuration === 'custom'
+                            ? ` (${confirmedBooking.durationHours} hrs)`
+                            : ''}
+                        </dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="text-slate-600">Pickup (IST)</dt>
-                        <dd className="font-medium tabular-nums">{formatISTDateTime(confirmedBooking.startDate)}</dd>
+                        <dd className="font-medium tabular-nums text-right">
+                          {formatISTDateTime(confirmedBooking.startDate)}
+                        </dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="text-slate-600">Return (IST)</dt>
-                        <dd className="font-medium tabular-nums">{formatISTDateTime(confirmedBooking.endDate)}</dd>
+                        <dd className="font-medium tabular-nums text-right">
+                          {formatISTDateTime(confirmedBooking.endDate)}
+                        </dd>
                       </div>
                       <div className="flex justify-between gap-2">
-                        <dt className="text-slate-600">Total Amount</dt>
-                        <dd className="font-bold tabular-nums">{formatINR(confirmedBooking.totalAmount)}</dd>
+                        <dt className="text-slate-600">Pickup Option</dt>
+                        <dd className="font-medium text-right">
+                          {confirmedBooking.pickupType === 'doorstep_delivery'
+                            ? 'Doorstep Delivery'
+                            : 'Hub Pickup (Siddipet)'}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2 border-t border-emerald-200/70 pt-2">
+                        <dt className="font-semibold text-slate-700">Estimated Total</dt>
+                        <dd className="font-bold tabular-nums">
+                          {formatINR(confirmedBooking.totalAmount)}
+                        </dd>
                       </div>
                     </dl>
                   </div>
 
                   <div className="flex flex-col gap-2.5">
-                    <Link
-                      to="/dashboard"
-                      className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
-                    >
-                      View My Bookings
-                    </Link>
+                    <WhatsAppButton
+                      label={`Contact on WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
+                      phoneNumber="917013647034"
+                      message={`Hello Siddipet Self Drive Cars, I submitted a booking request (Ref: ${confirmedBooking.bookingReference || `SSDC-${confirmedBooking.id.slice(0, 8).toUpperCase()}`}) for ${confirmedBooking.vehicleName || displayName} from ${formatISTDateTime(confirmedBooking.startDate)} to ${formatISTDateTime(confirmedBooking.endDate)}. Amount: ${formatINR(confirmedBooking.totalAmount)}. Name: ${confirmedBooking.guestName || guestName}, Mobile: ${confirmedBooking.guestPhone || guestPhone}. Please confirm availability.`}
+                      variant="primary"
+                      className="w-full justify-center py-2.5"
+                    />
+                    {user && (
+                      <Link
+                        to="/dashboard"
+                        className="inline-flex min-h-[44px] w-full items-center justify-center rounded-lg bg-[#0B1F3A] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
+                      >
+                        View My Bookings
+                      </Link>
+                    )}
                     <button
                       type="button"
                       onClick={() => setConfirmedBooking(null)}
@@ -651,7 +789,72 @@ export function VehicleDetailPage() {
                   </div>
                 </div>
               ) : (
-                <form onSubmit={handleBookingSubmit} className="mt-5 space-y-4" noValidate>
+                <form id="booking-form" onSubmit={handleBookingSubmit} className="mt-5 space-y-4" noValidate>
+                  {/* Customer Details (No Account Required) */}
+                  <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                    <p className="text-xs font-bold text-[#0B1F3A]">
+                      Book Now — No Account Required
+                    </p>
+                    <div>
+                      <label htmlFor="guest-name" className="block text-[11px] font-semibold text-slate-700">
+                        Full Name *
+                      </label>
+                      <div className="relative mt-1">
+                        <UserIcon
+                          className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                          aria-hidden="true"
+                        />
+                        <input
+                          id="guest-name"
+                          type="text"
+                          autoComplete="name"
+                          value={guestName}
+                          onChange={(e) => {
+                            setGuestName(e.target.value);
+                            setBookingError('');
+                          }}
+                          placeholder="Your full name"
+                          className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-xs text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <label htmlFor="guest-phone" className="block text-[11px] font-semibold text-slate-700">
+                          Mobile Number *
+                        </label>
+                        <span className="text-[10px] font-medium text-slate-500">10-digit Indian (+91)</span>
+                      </div>
+                      <div className="mt-1 flex">
+                        <span className="inline-flex h-10 items-center rounded-l-lg border border-r-0 border-slate-300 bg-white px-2.5 text-xs font-semibold text-[#0B1F3A]">
+                          +91
+                        </span>
+                        <div className="relative flex-1">
+                          <Phone
+                            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
+                            aria-hidden="true"
+                          />
+                          <input
+                            id="guest-phone"
+                            type="tel"
+                            inputMode="numeric"
+                            autoComplete="tel-national"
+                            maxLength={18}
+                            value={guestPhone}
+                            onChange={(e) => {
+                              setGuestPhone(e.target.value);
+                              setBookingError('');
+                            }}
+                            placeholder="98765 43210"
+                            className="h-10 w-full rounded-r-lg border border-slate-300 bg-white pl-8 pr-3 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+                            required
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   {/* Rental Duration Segmented Control */}
                   <div>
                     <span className="block text-xs font-semibold text-slate-700">
@@ -662,14 +865,14 @@ export function VehicleDetailPage() {
                         [
                           { id: '12h', label: '12 Hours' },
                           { id: '24h', label: '24 Hours' },
-                          { id: 'custom', label: 'Custom' },
+                          { id: 'custom', label: 'Custom (Day-wise)' },
                         ] as const
                       ).map((opt) => (
                         <button
                           key={opt.id}
                           type="button"
                           onClick={() => handleSelectDurationPreset(opt.id)}
-                          className={`rounded-md px-2.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+                          className={`rounded-md px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
                             rentalDuration === opt.id
                               ? 'bg-white text-[#0B1F3A] shadow-sm'
                               : 'text-slate-600 hover:text-[#0B1F3A]'
@@ -681,7 +884,28 @@ export function VehicleDetailPage() {
                     </div>
                   </div>
 
-                  {/* Pickup & Return Date/Time */}
+                  {/* Custom (Day-wise) 1 to 30 Days Dropdown */}
+                  {rentalDuration === 'custom' && (
+                    <div>
+                      <label htmlFor="custom-days-select" className="block text-xs font-semibold text-slate-700">
+                        Select Number of Days (1 to 30 Days)
+                      </label>
+                      <select
+                        id="custom-days-select"
+                        value={customDays}
+                        onChange={(e) => handleCustomDaysChange(Number(e.target.value))}
+                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+                      >
+                        {Array.from({ length: MAX_CUSTOM_DAYS }, (_, idx) => idx + 1).map((dayNum) => (
+                          <option key={dayNum} value={dayNum}>
+                            {dayNum} {dayNum === 1 ? 'Day' : 'Days'} ({dayNum * 24} Hours)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Pickup Date/Time (Editable) + Return Date/Time (Auto-calculated in IST) */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label htmlFor="detail-pickup" className="block text-[11px] font-semibold text-slate-700">
@@ -712,40 +936,43 @@ export function VehicleDetailPage() {
                     </div>
                     <div>
                       <label htmlFor="detail-return" className="block text-[11px] font-semibold text-slate-700">
-                        Return Date
+                        Return Date (Auto)
                       </label>
                       <input
                         id="detail-return"
                         type="date"
-                        min={pickupDate || minDate}
                         value={returnDate}
-                        onChange={(e) => {
-                          setReturnDate(e.target.value);
-                          setRentalDuration('custom');
-                          setBookingError('');
-                        }}
-                        className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none"
-                        required
+                        readOnly
+                        className="mt-1 h-10 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-[#0B1F3A] tabular-nums"
                       />
                     </div>
                     <div>
                       <label htmlFor="detail-return-time" className="block text-[11px] font-semibold text-slate-700">
-                        Return Time (IST)
+                        Return Time (IST · Auto)
                       </label>
                       <input
                         id="detail-return-time"
                         type="time"
                         value={returnTime}
-                        onChange={(e) => {
-                          setReturnTime(e.target.value);
-                          setRentalDuration('custom');
-                          setBookingError('');
-                        }}
-                        className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none"
-                        required
+                        readOnly
+                        className="mt-1 h-10 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-[#0B1F3A] tabular-nums"
                       />
                     </div>
                   </div>
+
+                  {/* Clear IST Pickup & Return Schedule Confirmation */}
+                  {startIso && endIso && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-[11px] text-slate-600 tabular-nums">
+                      <div className="flex justify-between gap-2">
+                        <span className="font-medium text-slate-500">Pickup (IST):</span>
+                        <span className="font-semibold text-[#0B1F3A]">{formatISTDateTime(startIso)}</span>
+                      </div>
+                      <div className="mt-1 flex justify-between gap-2">
+                        <span className="font-medium text-slate-500">Return (IST):</span>
+                        <span className="font-semibold text-[#0B1F3A]">{formatISTDateTime(endIso)}</span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Pickup Option */}
                   <div>
@@ -865,11 +1092,18 @@ export function VehicleDetailPage() {
                         <div className="flex justify-between gap-2 text-slate-600">
                           <span>Duration</span>
                           <span className="font-semibold text-[#0B1F3A] tabular-nums">
-                            {formatDurationLabel(priceBreakdown.durationHours)}
+                            {formatBookingDurationLabel(priceBreakdown.durationHours, rentalDuration)}
+                            {rentalDuration === 'custom' ? ` (${priceBreakdown.durationHours} hrs)` : ''}
                           </span>
                         </div>
                         <div className="flex justify-between gap-2 text-slate-600">
-                          <span>Base Rental Amount</span>
+                          <span>
+                            {rentalDuration === 'custom'
+                              ? `Rate (${customDays} ${customDays === 1 ? 'Day' : 'Days'} × ${formatINR(vehicle.price24h ?? (vehicle.price12h ?? 0) * 2)}/day)`
+                              : rentalDuration === '12h'
+                                ? '12 Hours Tariff'
+                                : '24 Hours Tariff'}
+                          </span>
                           <span className="font-semibold text-[#0B1F3A] tabular-nums">
                             {formatINR(priceBreakdown.baseAmount)}
                           </span>
@@ -890,7 +1124,7 @@ export function VehicleDetailPage() {
                         </div>
                       </div>
                       <p className="mt-2 text-[11px] text-slate-500">
-                        Calculated from 12h &amp; 24h vehicle rates. Security deposit is collected separately at handover.
+                        Calculated from actual vehicle 12h &amp; 24h rates. Security deposit is collected separately at handover.
                       </p>
                     </div>
                   )}
@@ -903,54 +1137,28 @@ export function VehicleDetailPage() {
                   )}
 
                   <div className="space-y-2.5 pt-1">
-                    {authLoading ? (
-                      <button
-                        type="button"
-                        disabled
-                        className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white opacity-70"
-                      >
+                    <button
+                      type="submit"
+                      disabled={submitting || !isBookable || isStartInPast || Boolean(overlappingSlot)}
+                      className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      {submitting ? (
                         <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                        <span>Checking Session...</span>
-                      </button>
-                    ) : user ? (
-                      <button
-                        type="submit"
-                        disabled={submitting || !isBookable || isStartInPast || Boolean(overlappingSlot)}
-                        className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-55"
-                      >
-                        {submitting ? (
-                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <CalendarCheck2 className="h-4 w-4" aria-hidden="true" />
-                        )}
-                        <span>
-                          {submitting
-                            ? 'Confirming Availability...'
-                            : !vehicle.isActive
-                              ? 'Currently Inactive'
-                              : 'Request Booking'}
-                        </span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigate('/login', {
-                            state: {
-                              from: `${location.pathname}${location.search}`,
-                              notice: 'Sign in with your customer account to book this vehicle.',
-                            },
-                          })
-                        }
-                        className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#1D4ED8]"
-                      >
+                      ) : (
                         <CalendarCheck2 className="h-4 w-4" aria-hidden="true" />
-                        <span>Sign In to Request Booking</span>
-                      </button>
-                    )}
+                      )}
+                      <span>
+                        {submitting
+                          ? 'Submitting Request...'
+                          : !vehicle.isActive
+                            ? 'Currently Inactive'
+                            : 'Book Now'}
+                      </span>
+                    </button>
 
                     <WhatsAppButton
-                      label="Inquire on WhatsApp"
+                      label={`Inquire on WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
+                      phoneNumber="917013647034"
                       message={whatsappMessage}
                       variant="outline"
                       className="w-full justify-center py-2.5"

@@ -42,57 +42,53 @@ export function HomePage() {
 
   return (
     <div>
-      {/* Hero Split Section */}
+      {/* Hero Section: Featured Vehicle Image First, Then Hero Copy & Search */}
       <section className="border-b border-slate-100 bg-gradient-to-b from-slate-50/70 to-white">
-        <div className="mx-auto max-w-7xl px-4 pb-12 pt-10 sm:px-6 sm:pt-14 lg:px-8 lg:pb-16 lg:pt-16">
-          <div className="grid grid-cols-1 items-stretch gap-8 lg:grid-cols-12 lg:gap-12">
-            {/* Left Copy Column */}
-            <div className="flex flex-col justify-center lg:col-span-6">
-              <div className="flex items-center gap-2 text-xs font-semibold tracking-wide text-[#1D4ED8] sm:text-sm">
-                <MapPin className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span>Siddipet, Telangana, India</span>
-              </div>
+        <div className="mx-auto max-w-7xl px-4 pb-12 pt-6 sm:px-6 sm:pt-8 lg:px-8 lg:pb-16 lg:pt-10">
+          {/* 1. Full-Width Featured Vehicle Image in Horizontal Landscape Layout */}
+          <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-sm">
+            <VehicleImage
+              src={HERO_IMAGE}
+              alt="Self drive car parked along a scenic lakeside road in Siddipet, Telangana"
+              aspectClassName="aspect-[16/10] sm:aspect-[16/9] lg:aspect-[21/9]"
+              className="object-[50%_75%]"
+            />
+          </div>
 
-              <h1 className="mt-3 font-display text-[clamp(2.25rem,4vw,3.75rem)] font-extrabold leading-[1.08] tracking-tight text-[#0B1F3A] text-balance">
-                Your Journey, Your Freedom
-              </h1>
-
-              <p className="mt-4 font-display text-lg font-semibold text-[#1D4ED8] sm:text-xl">
-                Affordable Self Drive Cars in Siddipet
-              </p>
-
-              <p className="mt-4 max-w-xl text-base leading-relaxed text-slate-600">
-                Well-maintained, sanitized self-drive hatchbacks and compact SUVs ready for local errands, family
-                gatherings, and highway drives from Siddipet to Hyderabad and across Telangana.
-              </p>
-
-              <div className="mt-8 flex flex-wrap items-center gap-4">
-                <Link
-                  to="/cars"
-                  className="inline-flex min-h-[46px] items-center gap-2 rounded-lg bg-[#0B1F3A] px-6 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-[#1D4ED8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8] whitespace-nowrap"
-                >
-                  <span>Browse Available Cars</span>
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </Link>
-                <Link
-                  to="/about"
-                  className="inline-flex min-h-[46px] items-center px-3 py-2 text-sm font-semibold text-[#0B1F3A] transition-colors hover:text-[#1D4ED8] whitespace-nowrap"
-                >
-                  How Self Drive Works
-                </Link>
-              </div>
+          {/* 2-6. Hero Copy & Primary Actions */}
+          <div className="mt-8 max-w-3xl lg:mt-10">
+            <div className="flex items-center gap-2 text-xs font-semibold tracking-wide text-[#1D4ED8] sm:text-sm">
+              <MapPin className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>Siddipet, Telangana, India</span>
             </div>
 
-            {/* Right Visual Column */}
-            <div className="lg:col-span-6">
-              <div className="h-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-sm">
-                <VehicleImage
-                  src={HERO_IMAGE}
-                  alt="Self drive car parked along a scenic lakeside road in Telangana"
-                  aspectClassName="aspect-[16/9] lg:h-full lg:aspect-auto"
-                  className="lg:h-full"
-                />
-              </div>
+            <h1 className="mt-3 font-display text-[clamp(2.15rem,4vw,3.5rem)] font-extrabold leading-[1.08] tracking-tight text-[#0B1F3A] text-balance">
+              Your Journey, Your Freedom
+            </h1>
+
+            <p className="mt-3 font-display text-lg font-semibold text-[#1D4ED8] sm:text-xl">
+              Affordable Self Drive Cars in Siddipet
+            </p>
+
+            <p className="mt-4 text-base leading-relaxed text-slate-600">
+              Well-maintained, sanitized self-drive hatchbacks and compact SUVs ready for local errands, family
+              gatherings, and highway drives from Siddipet to Hyderabad and across Telangana.
+            </p>
+
+            <div className="mt-6 flex flex-wrap items-center gap-4">
+              <Link
+                to="/cars"
+                className="inline-flex min-h-[46px] items-center gap-2 rounded-lg bg-[#0B1F3A] px-6 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-[#1D4ED8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8] whitespace-nowrap"
+              >
+                <span>Browse Available Cars</span>
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Link>
+              <Link
+                to="/about"
+                className="inline-flex min-h-[46px] items-center px-3 py-2 text-sm font-semibold text-[#0B1F3A] transition-colors hover:text-[#1D4ED8] whitespace-nowrap"
+              >
+                How Self Drive Works
+              </Link>
             </div>
           </div>
 
@@ -111,6 +107,9 @@ export function HomePage() {
             <h2 className="mt-1 font-display text-2xl font-bold tracking-tight text-[#0B1F3A] sm:text-3xl text-balance">
               Featured Cars in Siddipet
             </h2>
+            <p className="mt-1.5 text-sm text-slate-600">
+              Starting from ₹999 / 12 Hours depending on vehicle model — open any car to view its exact 12h and 24h rates.
+            </p>
           </div>
           <Link
             to="/cars"

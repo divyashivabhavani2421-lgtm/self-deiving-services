@@ -22,7 +22,7 @@ import { useAuth } from '../context/AuthContext';
 import { cancelOwnBooking, fetchMyBookings } from '../services/bookingsService';
 import { updateOwnProfile } from '../services/profileService';
 import { BookingRecord, BookingStatus } from '../types/booking';
-import { formatDurationLabel, formatINR, formatISTDateTime } from '../utils/rentalUtils';
+import { formatBookingDurationLabel, formatINR, formatISTDateTime } from '../utils/rentalUtils';
 import { VehicleImage } from '../components/VehicleImage';
 
 type BookingTab = 'upcoming' | 'past' | 'all';
@@ -197,9 +197,24 @@ export function DashboardPage() {
     }
   };
 
-  const displayName = profile?.fullName || user?.email?.split('@')[0] || 'Customer';
+  const displayName =
+    profile?.fullName ||
+    profile?.phone ||
+    user?.phone ||
+    user?.email?.split('@')[0] ||
+    'Customer';
   const displayEmail = profile?.email || user?.email || '';
-  const displayPhone = profile?.phone || 'Not added yet';
+  const displayPhone = profile?.phone || user?.phone || 'Not added yet';
+  const verificationLabel = user?.phone_confirmed_at
+    ? 'Mobile Verified (SMS OTP)'
+    : user?.email_confirmed_at
+      ? 'Email Confirmed'
+      : displayEmail
+        ? 'Pending email confirmation'
+        : 'Pending mobile verification';
+  const verificationHeading = user?.phone_confirmed_at || !displayEmail
+    ? 'Account Verification'
+    : 'Email Verification';
 
   return (
     <div className="bg-slate-50/60">
@@ -388,7 +403,12 @@ export function DashboardPage() {
                               {formatISTDateTime(booking.startDate)} → {formatISTDateTime(booking.endDate)}
                             </span>
                             <span>
-                              {formatDurationLabel(booking.durationHours)} ({booking.rentalDuration})
+                              {formatBookingDurationLabel(booking.durationHours, booking.rentalDuration)}
+                              {booking.rentalDuration === 'custom' &&
+                              booking.durationHours >= 24 &&
+                              booking.durationHours % 24 === 0
+                                ? ` · ${booking.durationHours} hrs`
+                                : ''}
                             </span>
                           </div>
 
@@ -490,7 +510,9 @@ export function DashboardPage() {
                   <Mail className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div className="min-w-0">
                     <dt className="text-xs text-slate-500">Email Address</dt>
-                    <dd className="truncate font-medium text-[#0B1F3A]">{displayEmail}</dd>
+                    <dd className="truncate font-medium text-[#0B1F3A]">
+                      {displayEmail || 'Not linked (Signed in via Mobile OTP)'}
+                    </dd>
                   </div>
                 </div>
 
@@ -505,10 +527,8 @@ export function DashboardPage() {
                 <div className="flex items-start gap-3">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#15803D]" aria-hidden="true" />
                   <div>
-                    <dt className="text-xs text-slate-500">Email Verification</dt>
-                    <dd className="font-medium text-[#0B1F3A]">
-                      {user?.email_confirmed_at ? 'Confirmed' : 'Pending confirmation'}
-                    </dd>
+                    <dt className="text-xs text-slate-500">{verificationHeading}</dt>
+                    <dd className="font-medium text-[#0B1F3A]">{verificationLabel}</dd>
                   </div>
                 </div>
               </dl>
@@ -519,7 +539,7 @@ export function DashboardPage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
               <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Profile Information</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Update your personal contact details. Email and account permissions are read-only for your security.
+                Update your personal contact details. Verified sign-in details and account permissions are read-only for your security.
               </p>
 
               {profileLoading && !profile ? (
@@ -578,6 +598,7 @@ export function DashboardPage() {
                       id="profile-email"
                       type="email"
                       value={displayEmail}
+                      placeholder="Not linked (Signed in via Mobile OTP)"
                       disabled
                       className="mt-1.5 h-11 w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-3.5 text-sm text-slate-500"
                     />

@@ -7,6 +7,8 @@ export const IST_OFFSET = '+05:30';
 export const MIN_RENTAL_HOURS = 12;
 export const MIN_RENTAL_MS = MIN_RENTAL_HOURS * 3_600_000;
 export const HOURS_24_MS = 24 * 3_600_000;
+export const MIN_CUSTOM_DAYS = 1;
+export const MAX_CUSTOM_DAYS = 30;
 
 export function formatINR(amount: number): string {
   const hasDecimals = Math.abs(amount % 1) > 0.001;
@@ -182,6 +184,29 @@ export function formatDurationLabel(durationHours: number): string {
   return `${durationHours} hrs (${fullDays}d ${extraHours}h)`;
 }
 
+/**
+ * Formats stored booking duration cleanly for customer & admin booking lists:
+ * - '12h' -> '12 Hours'
+ * - '24h' -> '24 Hours'
+ * - 'custom' (multiples of 24h) -> '1 Day', '3 Days', ..., '30 Days'
+ */
+export function formatBookingDurationLabel(
+  durationHours: number,
+  rentalDuration?: RentalDurationType
+): string {
+  if (rentalDuration === '12h') {
+    return '12 Hours';
+  }
+  if (rentalDuration === '24h') {
+    return '24 Hours';
+  }
+  if (durationHours >= 24 && durationHours % 24 === 0) {
+    const days = durationHours / 24;
+    return `${days} ${days === 1 ? 'Day' : 'Days'}`;
+  }
+  return formatDurationLabel(durationHours);
+}
+
 function roundINR(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -192,15 +217,9 @@ function roundINR(value: number): number {
  * Always recalculated server-side on submit.
  *
  * Pricing rule:
- * - 12h exact: price_12h
- * - 24h exact: price_24h
- * - custom (>= 12 full hours, billed in whole CEIL hours H):
- *     fullDays = floor(H / 24), remHours = H % 24
- *     remAmount =
- *       0 when remHours = 0
- *       min((price_12h / 12) * remHours, price_24h) when 1 <= remHours <= 12
- *       min(price_12h + (max(price_24h - price_12h, 0) / 12) * (remHours - 12), price_24h) when 13 <= remHours <= 23
- *     baseAmount = roundINR(fullDays * price_24h + remAmount)
+ * - 12 Hours ('12h'): price_12h
+ * - 24 Hours ('24h'): price_24h
+ * - Custom Day-wise ('custom', 1..30 days): days * price_24h
  */
 export function calculateBookingPricePreview(options: {
   price12h: number | null;
@@ -208,11 +227,12 @@ export function calculateBookingPricePreview(options: {
   durationHours: number;
   elapsedMs?: number | null;
   rentalDuration?: RentalDurationType;
+  customDays?: number;
   pickupType: PickupType;
 }): BookingPriceBreakdown | null {
   const raw12 = options.price12h ?? 0;
   const raw24 = options.price24h ?? 0;
-  const { durationHours, elapsedMs, rentalDuration, pickupType } = options;
+  const { durationHours, elapsedMs, rentalDuration, customDays, pickupType } = options;
 
   if (durationHours < MIN_RENTAL_HOURS) {
     return null;
@@ -235,6 +255,22 @@ export function calculateBookingPricePreview(options: {
     baseAmount = roundINR(effective12h);
   } else if (rentalDuration === '24h' && durationHours === 24) {
     baseAmount = roundINR(effective24h);
+  } else if (rentalDuration === 'custom') {
+    const resolvedDays =
+      customDays !== undefined
+        ? customDays
+        : extraHours === 0 && fullDays >= MIN_CUSTOM_DAYS
+          ? fullDays
+          : null;
+    if (
+      resolvedDays === null ||
+      resolvedDays < MIN_CUSTOM_DAYS ||
+      resolvedDays > MAX_CUSTOM_DAYS ||
+      durationHours !== resolvedDays * 24
+    ) {
+      return null;
+    }
+    baseAmount = roundINR(resolvedDays * effective24h);
   } else {
     let remAmount = 0;
     if (extraHours > 0 && extraHours <= 12) {

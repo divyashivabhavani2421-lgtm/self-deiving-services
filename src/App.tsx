@@ -16,6 +16,7 @@ import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
+import { AdminLoginPage } from './pages/admin/AdminLoginPage';
 
 function RecoveryRedirectWatcher() {
   const { isRecoveryMode } = useAuth();
@@ -56,8 +57,17 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            <Route path="/admin/login" element={<AdminLoginPage />} />
             <Route
               path="/admin"
+              element={
+                <AdminRoute>
+                  <AdminDashboardPage />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/*"
               element={
                 <AdminRoute>
                   <AdminDashboardPage />
