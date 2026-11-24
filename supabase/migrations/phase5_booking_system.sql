@@ -57,9 +57,11 @@ DECLARE
   v_duration_hours integer;
   v_full_days integer;
   v_extra_hours integer;
-  v_daily numeric;
-  v_hourly numeric;
-  v_partial numeric;
+  v_raw_12h numeric;
+  v_raw_24h numeric;
+  v_effective_12h numeric;
+  v_effective_24h numeric;
+  v_rem_amount numeric;
   v_base_amount numeric;
   v_delivery_fee numeric;
   v_is_admin boolean;
@@ -151,9 +153,8 @@ BEGIN
       v_delivery_fee := ROUND(0.00::numeric, 2);
     END IF;
 
-    -- Lock vehicle row to serialize concurrent bookings and prevent race conditions
-    SELECT v.id, v.daily_price, v.is_active, v.is_available,
-           NULLIF(to_jsonb(v)->>'hourly_price', '')::numeric AS hourly_price
+    -- Lock vehicle row to serialize concurrent bookings and check active status
+    SELECT v.id, v.price_12h, v.price_24h, v.is_active
     INTO v_vehicle
     FROM public.vehicles v
     WHERE v.id = NEW.vehicle_id
@@ -163,29 +164,44 @@ BEGIN
       RAISE EXCEPTION 'Selected vehicle does not exist.';
     END IF;
 
-    IF COALESCE(v_vehicle.is_active, true) = false OR COALESCE(v_vehicle.is_available, true) = false THEN
-      RAISE EXCEPTION 'This vehicle is currently unavailable for online booking.';
+    IF COALESCE(v_vehicle.is_active, false) = false THEN
+      RAISE EXCEPTION 'This vehicle is currently inactive and unavailable for booking.';
     END IF;
 
-    v_daily := COALESCE(v_vehicle.daily_price, 0);
-    v_hourly := COALESCE(v_vehicle.hourly_price, 0);
+    v_raw_12h := COALESCE(v_vehicle.price_12h, 0);
+    v_raw_24h := COALESCE(v_vehicle.price_24h, 0);
 
-    IF v_daily <= 0 AND v_hourly <= 0 THEN
+    IF v_raw_12h <= 0 AND v_raw_24h <= 0 THEN
       RAISE EXCEPTION 'Rental pricing is not configured for this vehicle yet.';
     END IF;
+
+    v_effective_12h := CASE WHEN v_raw_12h > 0 THEN v_raw_12h ELSE ROUND(v_raw_24h * 0.5, 2) END;
+    v_effective_24h := CASE WHEN v_raw_24h > 0 THEN v_raw_24h ELSE ROUND(v_raw_12h * 2.0, 2) END;
 
     v_full_days := v_duration_hours / 24;
     v_extra_hours := MOD(v_duration_hours, 24);
 
-    IF v_daily > 0 THEN
-      IF v_hourly > 0 THEN
-        v_partial := LEAST(v_extra_hours * v_hourly, v_daily);
-      ELSE
-        v_partial := LEAST((v_daily / 24.0) * v_extra_hours, v_daily);
-      END IF;
-      v_base_amount := ROUND((v_full_days * v_daily) + v_partial, 2);
+    IF NEW.rental_duration = '12h' AND v_duration_hours = 12 THEN
+      v_base_amount := ROUND(v_effective_12h, 2);
+    ELSIF NEW.rental_duration = '24h' AND v_duration_hours = 24 THEN
+      v_base_amount := ROUND(v_effective_24h, 2);
     ELSE
-      v_base_amount := ROUND(v_duration_hours * v_hourly, 2);
+      -- Custom pricing based strictly on price_12h and price_24h:
+      --   * Complete 24h blocks billed at price_24h each
+      --   * Remainder 1..12 hrs billed pro-rata from price_12h (so +12h = exact price_12h)
+      --   * Remainder 13..23 hrs billed as price_12h + pro-rata share of (price_24h - price_12h),
+      --     capped at price_24h per partial day.
+      IF v_extra_hours = 0 THEN
+        v_rem_amount := 0;
+      ELSIF v_extra_hours <= 12 THEN
+        v_rem_amount := LEAST((v_effective_12h / 12.0) * v_extra_hours, v_effective_24h);
+      ELSE
+        v_rem_amount := LEAST(
+          v_effective_12h + (GREATEST(v_effective_24h - v_effective_12h, 0) / 12.0) * (v_extra_hours - 12),
+          v_effective_24h
+        );
+      END IF;
+      v_base_amount := ROUND((v_full_days * v_effective_24h) + v_rem_amount, 2);
     END IF;
 
     NEW.duration_hours := v_duration_hours;
@@ -476,14 +492,14 @@ BEGIN
     b.status,
     b.notes,
     b.created_at,
-    v.name AS vehicle_name,
-    v.brand AS vehicle_brand,
+    NULLIF(trim(concat_ws(' ', v.make, v.model)), '') AS vehicle_name,
+    v.make AS vehicle_brand,
     v.model AS vehicle_model,
-    to_jsonb(v)->>'slug' AS vehicle_slug,
+    NULL::text AS vehicle_slug,
     v.image_url AS vehicle_image_url,
-    to_jsonb(v)->>'fuel_type' AS vehicle_fuel_type,
-    to_jsonb(v)->>'transmission' AS vehicle_transmission,
-    to_jsonb(v)->>'registration_number' AS vehicle_registration_number
+    v.fuel_type AS vehicle_fuel_type,
+    v.transmission AS vehicle_transmission,
+    v.registration_number AS vehicle_registration_number
   FROM public.bookings b
   LEFT JOIN public.vehicles v ON v.id = b.vehicle_id
   WHERE b.user_id = v_user_id
@@ -595,12 +611,12 @@ BEGIN
     b.status,
     b.notes,
     b.created_at,
-    v.name AS vehicle_name,
-    v.brand AS vehicle_brand,
+    NULLIF(trim(concat_ws(' ', v.make, v.model)), '') AS vehicle_name,
+    v.make AS vehicle_brand,
     v.model AS vehicle_model,
-    to_jsonb(v)->>'slug' AS vehicle_slug,
+    NULL::text AS vehicle_slug,
     v.image_url AS vehicle_image_url,
-    to_jsonb(v)->>'registration_number' AS vehicle_registration_number,
+    v.registration_number AS vehicle_registration_number,
     p.full_name AS customer_name,
     p.phone AS customer_phone,
     u.email::text AS customer_email

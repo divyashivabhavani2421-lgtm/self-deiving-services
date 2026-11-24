@@ -10,44 +10,34 @@ interface VehicleCardProps {
 }
 
 export function VehicleCard({ vehicle, searchQuery = '' }: VehicleCardProps) {
-  const detailUrl = `/cars/${encodeURIComponent(vehicle.slug || vehicle.id)}${searchQuery}`;
+  const detailUrl = `/cars/${encodeURIComponent(vehicle.id)}${searchQuery}`;
   const primaryImage = vehicle.image || vehicle.images[0] || '';
+  const displayName = [vehicle.make, vehicle.model].filter(Boolean).join(' ') || vehicle.name;
 
   return (
     <article className="group flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
       <Link to={detailUrl} className="block overflow-hidden bg-slate-100">
         <VehicleImage
           src={primaryImage}
-          alt={`${vehicle.name} self drive car in Siddipet`}
+          alt={`${displayName} self drive car in Siddipet`}
           className="transition-transform duration-300 group-hover:scale-[1.03]"
         />
       </Link>
 
       <div className="flex flex-1 flex-col p-5 sm:p-6">
         <div className="text-xs font-medium text-slate-500">
-          {vehicle.category}
-          {vehicle.year ? (
-            <>
-              {' '}
-              <span aria-hidden="true">·</span> {vehicle.year}
-            </>
-          ) : null}
-          {!vehicle.isAvailable ? (
-            <>
-              {' '}
-              <span aria-hidden="true">·</span> <span className="text-amber-700">Currently Unavailable</span>
-            </>
-          ) : null}
+          {[vehicle.make, vehicle.year ? `${vehicle.year} Model` : ''].filter(Boolean).join(' · ') ||
+            'Self Drive Car'}
         </div>
 
         <h3 className="mt-1 font-display text-lg font-bold text-[#0B1F3A]">
           <Link to={detailUrl} className="transition-colors hover:text-[#1D4ED8]">
-            {vehicle.name}
+            {displayName}
           </Link>
         </h3>
 
-        {vehicle.shortSummary ? (
-          <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-slate-600">{vehicle.shortSummary}</p>
+        {vehicle.description ? (
+          <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-slate-600">{vehicle.description}</p>
         ) : null}
 
         {/* Clean Specs Row */}
@@ -68,22 +58,29 @@ export function VehicleCard({ vehicle, searchQuery = '' }: VehicleCardProps) {
           </div>
         </dl>
 
-        {/* Price + View Details */}
+        {/* 24h & 12h Prices + View Details */}
         <div className="mt-auto flex items-center justify-between gap-4 pt-5">
           <div>
-            {vehicle.dailyPrice !== null ? (
+            {vehicle.price24h !== null ? (
               <div>
-                <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
-                  {formatINR(vehicle.dailyPrice)}
-                </span>
-                <span className="text-xs font-medium text-slate-500"> / day</span>
+                <div>
+                  <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
+                    {formatINR(vehicle.price24h)}
+                  </span>
+                  <span className="text-xs font-medium text-slate-500"> / 24h</span>
+                </div>
+                {vehicle.price12h !== null && (
+                  <div className="mt-0.5 text-xs font-medium text-slate-500 tabular-nums">
+                    12h: {formatINR(vehicle.price12h)}
+                  </div>
+                )}
               </div>
-            ) : vehicle.hourlyPrice !== null ? (
+            ) : vehicle.price12h !== null ? (
               <div>
                 <span className="font-display text-xl font-bold text-[#0B1F3A] tabular-nums">
-                  {formatINR(vehicle.hourlyPrice)}
+                  {formatINR(vehicle.price12h)}
                 </span>
-                <span className="text-xs font-medium text-slate-500"> / hr</span>
+                <span className="text-xs font-medium text-slate-500"> / 12h</span>
               </div>
             ) : (
               <span className="text-sm font-medium text-slate-600">Contact for rate</span>

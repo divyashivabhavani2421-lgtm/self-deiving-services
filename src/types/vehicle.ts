@@ -1,51 +1,43 @@
 export interface Vehicle {
   id: string;
   slug: string;
-  name: string;
-  brand: string;
+  make: string;
   model: string;
-  category: string;
+  name: string;
+  year: number | null;
   fuelType: string;
   transmission: string;
   seats: number | null;
-  dailyPrice: number | null;
-  hourlyPrice: number | null;
+  registrationNumber: string;
+  price12h: number | null;
+  price24h: number | null;
   securityDeposit: number | null;
-  mileage?: string;
-  luggageCapacity?: string;
-  year?: number;
-  featured: boolean;
-  isAvailable: boolean;
-  isActive: boolean;
+  mileage: string;
   image: string;
   images: string[];
-  shortSummary: string;
+  features: string[];
   description: string;
-  highlights: string[];
-  pickupLocation?: string;
-  registrationNumber?: string;
+  isActive: boolean;
   createdAt?: string;
   updatedAt?: string;
   rawColumns?: string[];
 }
 
 export interface VehicleWriteInput {
-  name: string;
-  brand: string;
+  make: string;
   model: string;
-  registrationNumber: string;
-  category: string;
+  year: number | null;
   fuelType: string;
   transmission: string;
   seats: number | null;
-  year: number | null;
-  dailyPrice: number | null;
-  hourlyPrice: number | null;
+  registrationNumber: string;
+  price12h: number | null;
+  price24h: number | null;
   securityDeposit: number | null;
+  mileage: string;
   description: string;
-  isAvailable: boolean;
+  features: string[];
   isActive: boolean;
-  featured?: boolean;
   image?: string;
   images?: string[];
 }

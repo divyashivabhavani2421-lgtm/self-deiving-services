@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   CheckCircle2,
   ImagePlus,
-  Info,
   Loader2,
   Save,
   X,
@@ -17,7 +16,6 @@ import {
 } from '../../services/storageService';
 import { createVehicle, updateVehicle } from '../../services/vehiclesService';
 import { Vehicle, VehicleWriteInput } from '../../types/vehicle';
-
 import { VehicleImage } from '../VehicleImage';
 
 interface VehicleFormProps {
@@ -35,7 +33,6 @@ interface StagedImage {
   validationError: string | null;
 }
 
-const CATEGORIES = ['Hatchback', 'Premium Hatchback', 'Sedan', 'Compact SUV', 'SUV', 'MPV'];
 const FUEL_TYPES = ['Petrol', 'Diesel', 'CNG', 'Electric', 'Hybrid'];
 const TRANSMISSIONS = ['Manual', 'Automatic', 'AMT', 'CVT'];
 
@@ -47,13 +44,11 @@ export function VehicleForm({
   onSaved,
   onManagePhotos,
 }: VehicleFormProps) {
-  const [name, setName] = useState(initialVehicle?.name ?? '');
-  const [brand, setBrand] = useState(initialVehicle?.brand ?? '');
+  const [make, setMake] = useState(initialVehicle?.make ?? '');
   const [model, setModel] = useState(initialVehicle?.model ?? '');
   const [registrationNumber, setRegistrationNumber] = useState(
     initialVehicle?.registrationNumber ?? ''
   );
-  const [category, setCategory] = useState(initialVehicle?.category || 'Hatchback');
   const [fuelType, setFuelType] = useState(initialVehicle?.fuelType || 'Petrol');
   const [transmission, setTransmission] = useState(initialVehicle?.transmission || 'Manual');
   const [seats, setSeats] = useState(
@@ -62,16 +57,19 @@ export function VehicleForm({
       : '5'
   );
   const [year, setYear] = useState(
-    initialVehicle?.year !== undefined ? String(initialVehicle.year) : String(new Date().getFullYear())
+    initialVehicle?.year !== null && initialVehicle?.year !== undefined
+      ? String(initialVehicle.year)
+      : String(new Date().getFullYear())
   );
-  const [dailyPrice, setDailyPrice] = useState(
-    initialVehicle?.dailyPrice !== null && initialVehicle?.dailyPrice !== undefined
-      ? String(initialVehicle.dailyPrice)
+  const [mileage, setMileage] = useState(initialVehicle?.mileage ?? '');
+  const [price12h, setPrice12h] = useState(
+    initialVehicle?.price12h !== null && initialVehicle?.price12h !== undefined
+      ? String(initialVehicle.price12h)
       : ''
   );
-  const [hourlyPrice, setHourlyPrice] = useState(
-    initialVehicle?.hourlyPrice !== null && initialVehicle?.hourlyPrice !== undefined
-      ? String(initialVehicle.hourlyPrice)
+  const [price24h, setPrice24h] = useState(
+    initialVehicle?.price24h !== null && initialVehicle?.price24h !== undefined
+      ? String(initialVehicle.price24h)
       : ''
   );
   const [securityDeposit, setSecurityDeposit] = useState(
@@ -79,10 +77,11 @@ export function VehicleForm({
       ? String(initialVehicle.securityDeposit)
       : ''
   );
+  const [featuresText, setFeaturesText] = useState(
+    initialVehicle?.features?.join(', ') ?? ''
+  );
   const [description, setDescription] = useState(initialVehicle?.description ?? '');
-  const [isAvailable, setIsAvailable] = useState(initialVehicle?.isAvailable ?? true);
   const [isActive, setIsActive] = useState(initialVehicle?.isActive ?? true);
-  const [featured, setFeatured] = useState(initialVehicle?.featured ?? false);
 
   const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
   const [setUploadedAsPrimary, setSetUploadedAsPrimary] = useState(!initialVehicle?.image);
@@ -101,11 +100,6 @@ export function VehicleForm({
     };
   }, []);
 
-  const categoryOptions = useMemo(() => {
-    const val = initialVehicle?.category?.trim();
-    return val && !CATEGORIES.includes(val) ? [val, ...CATEGORIES] : CATEGORIES;
-  }, [initialVehicle?.category]);
-
   const fuelOptions = useMemo(() => {
     const val = initialVehicle?.fuelType?.trim();
     return val && !FUEL_TYPES.includes(val) ? [val, ...FUEL_TYPES] : FUEL_TYPES;
@@ -115,25 +109,6 @@ export function VehicleForm({
     const val = initialVehicle?.transmission?.trim();
     return val && !TRANSMISSIONS.includes(val) ? [val, ...TRANSMISSIONS] : TRANSMISSIONS;
   }, [initialVehicle?.transmission]);
-
-  const missingOptionalCols = useMemo(() => {
-    if (detectedColumns.length === 0) return [];
-    const cols = new Set(detectedColumns);
-    const missing: string[] = [];
-    if (!cols.has('hourly_price') && !cols.has('price_per_hour') && !cols.has('hourly_rate')) {
-      missing.push('hourly_price');
-    }
-    if (!cols.has('security_deposit') && !cols.has('deposit_amount') && !cols.has('deposit')) {
-      missing.push('security_deposit');
-    }
-    if (!cols.has('registration_number') && !cols.has('reg_no') && !cols.has('plate_number')) {
-      missing.push('registration_number');
-    }
-    if (!cols.has('is_active') && !cols.has('active')) {
-      missing.push('is_active');
-    }
-    return missing;
-  }, [detectedColumns]);
 
   const handleSelectPhotos = (event: ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -168,8 +143,13 @@ export function VehicleForm({
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
 
-    if (!name.trim()) {
-      setError('Vehicle name is required.');
+    if (!make.trim()) {
+      setError('Vehicle make (brand) is required.');
+      return;
+    }
+
+    if (!model.trim()) {
+      setError('Vehicle model is required.');
       return;
     }
 
@@ -185,15 +165,15 @@ export function VehicleForm({
       return;
     }
 
-    const parsedDaily = dailyPrice.trim() ? Number(dailyPrice) : null;
-    if (parsedDaily === null || !Number.isFinite(parsedDaily) || parsedDaily < 0) {
-      setError('Please enter a valid daily rental price in INR.');
+    const parsedPrice12h = price12h.trim() ? Number(price12h) : null;
+    if (parsedPrice12h === null || !Number.isFinite(parsedPrice12h) || parsedPrice12h <= 0) {
+      setError('Please enter a valid 12-hour rental price (₹) greater than 0.');
       return;
     }
 
-    const parsedHourly = hourlyPrice.trim() ? Number(hourlyPrice) : null;
-    if (parsedHourly !== null && (!Number.isFinite(parsedHourly) || parsedHourly < 0)) {
-      setError('Hourly rental price must be a positive number.');
+    const parsedPrice24h = price24h.trim() ? Number(price24h) : null;
+    if (parsedPrice24h === null || !Number.isFinite(parsedPrice24h) || parsedPrice24h <= 0) {
+      setError('Please enter a valid 24-hour rental price (₹) greater than 0.');
       return;
     }
 
@@ -202,6 +182,11 @@ export function VehicleForm({
       setError('Security deposit must be zero or a positive number.');
       return;
     }
+
+    const parsedFeatures = featuresText
+      .split(/[,|\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
 
     const invalidStaged = stagedImages.find((item) => item.validationError);
     if (invalidStaged) {
@@ -219,22 +204,20 @@ export function VehicleForm({
     setUploadProgress(null);
 
     const payload: VehicleWriteInput = {
-      name: name.trim(),
-      brand: brand.trim(),
+      make: make.trim(),
       model: model.trim(),
-      registrationNumber: registrationNumber.trim().toUpperCase(),
-      category,
+      year: parsedYear,
       fuelType,
       transmission,
       seats: parsedSeats,
-      year: parsedYear,
-      dailyPrice: parsedDaily,
-      hourlyPrice: parsedHourly,
+      registrationNumber: registrationNumber.trim().toUpperCase(),
+      price12h: parsedPrice12h,
+      price24h: parsedPrice24h,
       securityDeposit: parsedDeposit,
+      mileage: mileage.trim(),
       description: description.trim(),
-      isAvailable,
+      features: parsedFeatures,
       isActive,
-      featured,
     };
 
     try {
@@ -245,11 +228,11 @@ export function VehicleForm({
       // Upload images to `vehicle-images` FIRST so image_url is guaranteed non-null on insert
       if (filesToUpload.length > 0) {
         setSubmitPhase('uploading');
+        const slugSeed = `${make.trim()} ${model.trim()}`;
         const folderPrefix =
           mode === 'edit' && initialVehicle?.id
             ? initialVehicle.id
-            : `vehicles/${name
-                .trim()
+            : `vehicles/${slugSeed
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, '-')
                 .replace(/^-+|-+$/g, '')
@@ -263,7 +246,6 @@ export function VehicleForm({
         newlyUploadedUrls = uploadRes.uploaded.map((u) => u.publicUrl).filter(Boolean);
 
         if (uploadRes.errors.length > 0 || newlyUploadedUrls.length === 0) {
-          // Clean up any partial uploads from this failed batch so no orphan files remain
           await deleteUploadedFiles(newlyUploadedPaths);
           setError(
             uploadRes.errors.length > 0
@@ -330,10 +312,6 @@ export function VehicleForm({
       });
       setStagedImages([]);
 
-      const skippedNote =
-        result.skippedFields.length > 0
-          ? ` (Skipped fields not yet in your vehicles table: ${result.skippedFields.join(', ')})`
-          : '';
       const photoNote =
         newlyUploadedUrls.length > 0
           ? ` Uploaded ${newlyUploadedUrls.length} photograph(s) to vehicle-images.`
@@ -341,8 +319,8 @@ export function VehicleForm({
 
       const notice =
         mode === 'create'
-          ? `Added "${result.vehicle.name}" to the fleet.${photoNote}${skippedNote}`
-          : `Updated "${result.vehicle.name}".${photoNote}${skippedNote}`;
+          ? `Added "${result.vehicle.name}" to the fleet.${photoNote}`
+          : `Updated "${result.vehicle.name}".${photoNote}`;
 
       onSaved(result.vehicle, notice);
     } catch (err) {
@@ -364,7 +342,7 @@ export function VehicleForm({
           <p className="mt-1 text-sm text-slate-600">
             {mode === 'create'
               ? 'Create a new vehicle record in your Supabase vehicles table.'
-              : 'Update specifications, pricing, availability, or active status.'}
+              : 'Update specifications, 12h/24h pricing, gallery, or active status.'}
           </p>
         </div>
 
@@ -378,52 +356,27 @@ export function VehicleForm({
         </button>
       </div>
 
-      {missingOptionalCols.length > 0 && (
-        <div className="mt-5 flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50/70 p-3.5 text-xs leading-relaxed text-[#0B1F3A]">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-          <div>
-            Your current <code className="font-mono font-semibold">vehicles</code> table does not yet include{' '}
-            <code className="font-mono font-semibold">{missingOptionalCols.join(', ')}</code>. Existing columns will
-            save normally; run the Phase 4 SQL migration if you want to store those additional fields.
-          </div>
-        </div>
-      )}
-
       <form onSubmit={handleSubmit} className="mt-6 space-y-6" noValidate>
         {/* Basic Info */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           <div>
-            <label htmlFor="vf-name" className="block text-xs font-semibold text-slate-700">
-              Vehicle Name *
+            <label htmlFor="vf-make" className="block text-xs font-semibold text-slate-700">
+              Make (Brand) *
             </label>
             <input
-              id="vf-name"
+              id="vf-make"
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Maruti Suzuki Swift"
+              value={make}
+              onChange={(e) => setMake(e.target.value)}
+              placeholder="e.g. Maruti Suzuki"
               className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
               required
             />
           </div>
 
           <div>
-            <label htmlFor="vf-brand" className="block text-xs font-semibold text-slate-700">
-              Brand
-            </label>
-            <input
-              id="vf-brand"
-              type="text"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              placeholder="e.g. Maruti Suzuki"
-              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-            />
-          </div>
-
-          <div>
             <label htmlFor="vf-model" className="block text-xs font-semibold text-slate-700">
-              Model
+              Model *
             </label>
             <input
               id="vf-model"
@@ -432,6 +385,7 @@ export function VehicleForm({
               onChange={(e) => setModel(e.target.value)}
               placeholder="e.g. Swift VXI"
               className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+              required
             />
           </div>
 
@@ -450,24 +404,6 @@ export function VehicleForm({
           </div>
 
           <div>
-            <label htmlFor="vf-category" className="block text-xs font-semibold text-slate-700">
-              Category
-            </label>
-            <select
-              id="vf-category"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-            >
-              {categoryOptions.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
             <label htmlFor="vf-year" className="block text-xs font-semibold text-slate-700">
               Model Year
             </label>
@@ -479,6 +415,36 @@ export function VehicleForm({
               value={year}
               onChange={(e) => setYear(e.target.value)}
               className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="vf-mileage" className="block text-xs font-semibold text-slate-700">
+              Mileage
+            </label>
+            <input
+              id="vf-mileage"
+              type="text"
+              value={mileage}
+              onChange={(e) => setMileage(e.target.value)}
+              placeholder="e.g. 22 km/l"
+              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="vf-seats" className="block text-xs font-semibold text-slate-700">
+              Seating Capacity *
+            </label>
+            <input
+              id="vf-seats"
+              type="number"
+              min={1}
+              max={15}
+              value={seats}
+              onChange={(e) => setSeats(e.target.value)}
+              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+              required
             />
           </div>
         </div>
@@ -522,55 +488,6 @@ export function VehicleForm({
           </div>
 
           <div>
-            <label htmlFor="vf-seats" className="block text-xs font-semibold text-slate-700">
-              Seating Capacity *
-            </label>
-            <input
-              id="vf-seats"
-              type="number"
-              min={1}
-              max={15}
-              value={seats}
-              onChange={(e) => setSeats(e.target.value)}
-              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-              required
-            />
-          </div>
-
-          <div>
-            <label htmlFor="vf-daily" className="block text-xs font-semibold text-slate-700">
-              Daily Rental Price (₹) *
-            </label>
-            <input
-              id="vf-daily"
-              type="number"
-              min={0}
-              step="50"
-              value={dailyPrice}
-              onChange={(e) => setDailyPrice(e.target.value)}
-              placeholder="e.g. 1400"
-              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-              required
-            />
-          </div>
-
-          <div>
-            <label htmlFor="vf-hourly" className="block text-xs font-semibold text-slate-700">
-              Hourly Rental Price (₹)
-            </label>
-            <input
-              id="vf-hourly"
-              type="number"
-              min={0}
-              step="10"
-              value={hourlyPrice}
-              onChange={(e) => setHourlyPrice(e.target.value)}
-              placeholder="Optional, e.g. 150"
-              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-            />
-          </div>
-
-          <div>
             <label htmlFor="vf-deposit" className="block text-xs font-semibold text-slate-700">
               Security Deposit (₹)
             </label>
@@ -585,24 +502,74 @@ export function VehicleForm({
               className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
             />
           </div>
+
+          <div>
+            <label htmlFor="vf-price-12h" className="block text-xs font-semibold text-slate-700">
+              12-Hour Rental Price (₹) *
+            </label>
+            <input
+              id="vf-price-12h"
+              type="number"
+              min={1}
+              step="50"
+              value={price12h}
+              onChange={(e) => setPrice12h(e.target.value)}
+              placeholder="e.g. 1000"
+              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+              required
+            />
+          </div>
+
+          <div>
+            <label htmlFor="vf-price-24h" className="block text-xs font-semibold text-slate-700">
+              24-Hour Rental Price (₹) *
+            </label>
+            <input
+              id="vf-price-24h"
+              type="number"
+              min={1}
+              step="50"
+              value={price24h}
+              onChange={(e) => setPrice24h(e.target.value)}
+              placeholder="e.g. 1600"
+              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] tabular-nums focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+              required
+            />
+          </div>
         </div>
 
-        {/* Description */}
-        <div className="border-t border-slate-100 pt-5">
-          <label htmlFor="vf-desc" className="block text-xs font-semibold text-slate-700">
-            Description
-          </label>
-          <textarea
-            id="vf-desc"
-            rows={4}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe cabin condition, luggage capacity, and highway comfort..."
-            className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
-          />
+        {/* Features & Description */}
+        <div className="space-y-5 border-t border-slate-100 pt-5">
+          <div>
+            <label htmlFor="vf-features" className="block text-xs font-semibold text-slate-700">
+              Features <span className="font-normal text-slate-500">(Comma-separated)</span>
+            </label>
+            <input
+              id="vf-features"
+              type="text"
+              value={featuresText}
+              onChange={(e) => setFeaturesText(e.target.value)}
+              placeholder="e.g. AC, Apple CarPlay, Reverse Camera, Dual Airbags"
+              className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="vf-desc" className="block text-xs font-semibold text-slate-700">
+              Description
+            </label>
+            <textarea
+              id="vf-desc"
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe cabin condition, luggage capacity, and highway comfort..."
+              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+            />
+          </div>
         </div>
 
-        {/* Photographs Upload (Required when adding a vehicle) */}
+        {/* Photographs Upload */}
         <div className="border-t border-slate-100 pt-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -614,8 +581,8 @@ export function VehicleForm({
               </p>
               <p className="mt-0.5 text-[11px] text-slate-500">
                 {mode === 'create'
-                  ? 'Select at least one JPG, PNG, or WebP photograph (max 5 MB each). The first photo becomes the primary listing image.'
-                  : 'Optional JPG, PNG, or WebP files up to 5 MB each. You can also manage or reorder photos in the Vehicle Images tab.'}
+                  ? 'Select at least one JPG, PNG, or WebP photograph (max 5 MB each). The first photo becomes the primary image_url.'
+                  : 'Optional JPG, PNG, or WebP files up to 5 MB each. Saved to image_url and gallery_urls.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -658,7 +625,7 @@ export function VehicleForm({
               <div className="min-w-0 text-xs">
                 <p className="font-semibold text-[#0B1F3A]">Current Listing Photo</p>
                 <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                  {initialVehicle?.images.length || 1} linked photo(s). Select new photos on the right or click Manage All Photos.
+                  {initialVehicle?.images.length || 1} linked photo(s). Select new photos or click Manage All Photos.
                 </p>
               </div>
             </div>
@@ -736,22 +703,9 @@ export function VehicleForm({
           )}
         </div>
 
-        {/* Status Switches */}
-        <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-5 sm:grid-cols-3">
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3.5 hover:bg-slate-50">
-            <input
-              type="checkbox"
-              checked={isAvailable}
-              onChange={(e) => setIsAvailable(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
-            />
-            <div>
-              <p className="text-xs font-semibold text-[#0B1F3A]">Available for Pickup</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">Marks vehicle ready for new inquiries.</p>
-            </div>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3.5 hover:bg-slate-50">
+        {/* Active Switch */}
+        <div className="border-t border-slate-100 pt-5">
+          <label className="flex max-w-md cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3.5 hover:bg-slate-50">
             <input
               type="checkbox"
               checked={isActive}
@@ -759,21 +713,10 @@ export function VehicleForm({
               className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
             />
             <div>
-              <p className="text-xs font-semibold text-[#0B1F3A]">Active on Website</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">Uncheck to hide from customers safely.</p>
-            </div>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3.5 hover:bg-slate-50">
-            <input
-              type="checkbox"
-              checked={featured}
-              onChange={(e) => setFeatured(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
-            />
-            <div>
-              <p className="text-xs font-semibold text-[#0B1F3A]">Featured on Home</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">Highlights vehicle in homepage showcase.</p>
+              <p className="text-xs font-semibold text-[#0B1F3A]">Active &amp; Bookable on Website</p>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Uncheck to hide from customer listings and block new bookings safely.
+              </p>
             </div>
           </label>
         </div>

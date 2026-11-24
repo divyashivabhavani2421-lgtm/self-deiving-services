@@ -1,10 +1,12 @@
 import { BUSINESS_CONFIG } from '../config/businessConfig';
-import { BookingPriceBreakdown, BookedSlot, PickupType } from '../types/booking';
+import { BookingPriceBreakdown, BookedSlot, PickupType, RentalDurationType } from '../types/booking';
 import { RentalSearchParams } from '../types/vehicle';
 
 export const IST_TIMEZONE = 'Asia/Kolkata';
 export const IST_OFFSET = '+05:30';
 export const MIN_RENTAL_HOURS = 12;
+export const MIN_RENTAL_MS = MIN_RENTAL_HOURS * 3_600_000;
+export const HOURS_24_MS = 24 * 3_600_000;
 
 export function formatINR(amount: number): string {
   const hasDecimals = Math.abs(amount % 1) > 0.001;
@@ -43,8 +45,7 @@ export function getTodayInputDate(offsetDays = 0): string {
 }
 
 /**
- * Returns current time rounded up to the next hour in Asia/Kolkata (HH:mm),
- * useful for validating same-day pickups in IST.
+ * Returns current date & time in Asia/Kolkata (YYYY-MM-DD, HH:mm).
  */
 export function getCurrentISTTimeParts(): { date: string; time: string } {
   const now = new Date();
@@ -142,7 +143,7 @@ export function getDefaultSearchParams(): RentalSearchParams {
   };
 }
 
-export function calculateDurationHours(params: Partial<RentalSearchParams>): number | null {
+export function calculateElapsedMs(params: Partial<RentalSearchParams>): number | null {
   if (!params.pickupDate || !params.returnDate) {
     return null;
   }
@@ -154,8 +155,12 @@ export function calculateDurationHours(params: Partial<RentalSearchParams>): num
   if (!startIso || !endIso) return null;
 
   const diffMs = new Date(endIso).getTime() - new Date(startIso).getTime();
-  if (diffMs <= 0) return null;
+  return diffMs > 0 ? diffMs : null;
+}
 
+export function calculateDurationHours(params: Partial<RentalSearchParams>): number | null {
+  const diffMs = calculateElapsedMs(params);
+  if (diffMs === null) return null;
   return Math.ceil(diffMs / 3_600_000);
 }
 
@@ -183,34 +188,64 @@ function roundINR(value: number): number {
 
 /**
  * Client-side preview matching the exact server PostgreSQL pricing formula
- * in `phase5_booking_system.sql` (rounded to 2 decimal places). Always recalculated server-side on submit.
+ * based on `price_12h` and `price_24h` (rounded to 2 decimal places).
+ * Always recalculated server-side on submit.
+ *
+ * Pricing rule:
+ * - 12h exact: price_12h
+ * - 24h exact: price_24h
+ * - custom (>= 12 full hours, billed in whole CEIL hours H):
+ *     fullDays = floor(H / 24), remHours = H % 24
+ *     remAmount =
+ *       0 when remHours = 0
+ *       min((price_12h / 12) * remHours, price_24h) when 1 <= remHours <= 12
+ *       min(price_12h + (max(price_24h - price_12h, 0) / 12) * (remHours - 12), price_24h) when 13 <= remHours <= 23
+ *     baseAmount = roundINR(fullDays * price_24h + remAmount)
  */
 export function calculateBookingPricePreview(options: {
-  dailyPrice: number | null;
-  hourlyPrice: number | null;
+  price12h: number | null;
+  price24h: number | null;
   durationHours: number;
+  elapsedMs?: number | null;
+  rentalDuration?: RentalDurationType;
   pickupType: PickupType;
 }): BookingPriceBreakdown | null {
-  const daily = options.dailyPrice ?? 0;
-  const hourly = options.hourlyPrice ?? 0;
-  const { durationHours, pickupType } = options;
+  const raw12 = options.price12h ?? 0;
+  const raw24 = options.price24h ?? 0;
+  const { durationHours, elapsedMs, rentalDuration, pickupType } = options;
 
-  if (durationHours < MIN_RENTAL_HOURS || (daily <= 0 && hourly <= 0)) {
+  if (durationHours < MIN_RENTAL_HOURS) {
+    return null;
+  }
+  if (elapsedMs !== undefined && elapsedMs !== null && elapsedMs < MIN_RENTAL_MS) {
+    return null;
+  }
+  if (raw12 <= 0 && raw24 <= 0) {
     return null;
   }
 
+  const effective12h = raw12 > 0 ? raw12 : roundINR(raw24 * 0.5);
+  const effective24h = raw24 > 0 ? raw24 : roundINR(raw12 * 2);
+
+  let baseAmount = 0;
   const fullDays = Math.floor(durationHours / 24);
   const extraHours = durationHours % 24;
 
-  let baseAmount = 0;
-  if (daily > 0) {
-    const partial =
-      hourly > 0
-        ? Math.min(extraHours * hourly, daily)
-        : Math.min((daily / 24) * extraHours, daily);
-    baseAmount = roundINR(fullDays * daily + partial);
+  if (rentalDuration === '12h' && durationHours === 12) {
+    baseAmount = roundINR(effective12h);
+  } else if (rentalDuration === '24h' && durationHours === 24) {
+    baseAmount = roundINR(effective24h);
   } else {
-    baseAmount = roundINR(durationHours * hourly);
+    let remAmount = 0;
+    if (extraHours > 0 && extraHours <= 12) {
+      remAmount = Math.min((effective12h / 12) * extraHours, effective24h);
+    } else if (extraHours > 12) {
+      remAmount = Math.min(
+        effective12h + (Math.max(effective24h - effective12h, 0) / 12) * (extraHours - 12),
+        effective24h
+      );
+    }
+    baseAmount = roundINR(fullDays * effective24h + remAmount);
   }
 
   const deliveryFee =

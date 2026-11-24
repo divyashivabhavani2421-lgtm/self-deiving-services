@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
-  CalendarCheck2,
   CarFront,
   CheckCircle2,
   ClipboardList,
@@ -38,7 +37,6 @@ type AdminSection =
   | 'add'
   | 'edit'
   | 'images'
-  | 'availability'
   | 'pricing'
   | 'settings';
 
@@ -48,7 +46,6 @@ const SIDEBAR_ITEMS: { id: AdminSection; label: string; icon: typeof LayoutDashb
   { id: 'vehicles', label: 'Manage Vehicles', icon: CarFront },
   { id: 'add', label: 'Add Vehicle', icon: Plus },
   { id: 'images', label: 'Vehicle Images', icon: ImageIcon },
-  { id: 'availability', label: 'Vehicle Availability', icon: CalendarCheck2 },
   { id: 'pricing', label: 'Rental Pricing', icon: IndianRupee },
   { id: 'settings', label: 'Business Settings', icon: Settings },
 ];
@@ -66,24 +63,26 @@ export function AdminDashboardPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'available' | 'unavailable'>('all');
 
   const [busyVehicleId, setBusyVehicleId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Vehicle | null>(null);
   const [actionNotice, setActionNotice] = useState<string>('');
   const [actionError, setActionError] = useState<string>('');
 
-  // Inline pricing drafts keyed by vehicle ID
+  // Inline pricing drafts keyed by vehicle ID (12h / 24h / deposit)
   const [pricingDrafts, setPricingDrafts] = useState<
-    Record<string, { daily: string; hourly: string; deposit: string }>
+    Record<string, { price12h: string; price24h: string; deposit: string }>
   >({});
 
   const stats = useMemo(() => {
     const total = vehicles.length;
     const active = vehicles.filter((v) => v.isActive).length;
     const inactive = vehicles.filter((v) => !v.isActive).length;
-    const available = vehicles.filter((v) => v.isActive && v.isAvailable).length;
-    return { total, active, inactive, available };
+    const rates = vehicles
+      .filter((v) => v.isActive && v.price24h !== null && v.price24h > 0)
+      .map((v) => v.price24h as number);
+    const starting24h = rates.length > 0 ? Math.min(...rates) : null;
+    return { total, active, inactive, starting24h };
   }, [vehicles]);
 
   const filteredVehicles = useMemo(() => {
@@ -91,38 +90,18 @@ export function AdminDashboardPage() {
     return vehicles.filter((car) => {
       if (statusFilter === 'active' && !car.isActive) return false;
       if (statusFilter === 'inactive' && car.isActive) return false;
-      if (availabilityFilter === 'available' && !car.isAvailable) return false;
-      if (availabilityFilter === 'unavailable' && car.isAvailable) return false;
       if (
         q &&
         !car.name.toLowerCase().includes(q) &&
-        !car.brand.toLowerCase().includes(q) &&
-        !(car.registrationNumber || '').toLowerCase().includes(q)
+        !car.make.toLowerCase().includes(q) &&
+        !car.model.toLowerCase().includes(q) &&
+        !car.registrationNumber.toLowerCase().includes(q)
       ) {
         return false;
       }
       return true;
     });
-  }, [vehicles, searchQuery, statusFilter, availabilityFilter]);
-
-  const handleToggleAvailable = async (car: Vehicle) => {
-    setBusyVehicleId(car.id);
-    setActionError('');
-    setActionNotice('');
-    try {
-      const res = await updateVehicle(car.id, { isAvailable: !car.isAvailable }, detectedColumns);
-      if (res.error) {
-        setActionError(res.error);
-        return;
-      }
-      setActionNotice(
-        `"${car.name}" marked as ${!car.isAvailable ? 'Available' : 'Unavailable'}.`
-      );
-      reload();
-    } finally {
-      setBusyVehicleId(null);
-    }
-  };
+  }, [vehicles, searchQuery, statusFilter]);
 
   const handleToggleActive = async (car: Vehicle) => {
     setBusyVehicleId(car.id);
@@ -134,14 +113,8 @@ export function AdminDashboardPage() {
         setActionError(res.error);
         return;
       }
-      if (res.skippedFields.includes('Active Status')) {
-        setActionError(
-          'Your vehicles table does not yet have an is_active column. Run the Phase 4 SQL migration to activate/deactivate vehicles.'
-        );
-        return;
-      }
       setActionNotice(
-        `"${car.name}" is now ${!car.isActive ? 'Active (visible to customers)' : 'Inactive (hidden from customers)'}.`
+        `"${car.name}" is now ${!car.isActive ? 'Active (visible & bookable)' : 'Inactive (hidden from customers)'}.`
       );
       reload();
     } finally {
@@ -174,8 +147,8 @@ export function AdminDashboardPage() {
   const getPricingDraft = (car: Vehicle) => {
     return (
       pricingDrafts[car.id] ?? {
-        daily: car.dailyPrice !== null ? String(car.dailyPrice) : '',
-        hourly: car.hourlyPrice !== null ? String(car.hourlyPrice) : '',
+        price12h: car.price12h !== null ? String(car.price12h) : '',
+        price24h: car.price24h !== null ? String(car.price24h) : '',
         deposit: car.securityDeposit !== null ? String(car.securityDeposit) : '',
       }
     );
@@ -183,16 +156,16 @@ export function AdminDashboardPage() {
 
   const handleSaveRowPricing = async (car: Vehicle) => {
     const draft = getPricingDraft(car);
-    const daily = draft.daily.trim() ? Number(draft.daily) : null;
-    const hourly = draft.hourly.trim() ? Number(draft.hourly) : null;
+    const p12 = draft.price12h.trim() ? Number(draft.price12h) : null;
+    const p24 = draft.price24h.trim() ? Number(draft.price24h) : null;
     const deposit = draft.deposit.trim() ? Number(draft.deposit) : null;
 
-    if (daily === null || !Number.isFinite(daily) || daily < 0) {
-      setActionError(`Please enter a valid daily price for ${car.name}.`);
+    if (p12 === null || !Number.isFinite(p12) || p12 <= 0) {
+      setActionError(`Please enter a valid 12h price for ${car.name}.`);
       return;
     }
-    if (hourly !== null && (!Number.isFinite(hourly) || hourly < 0)) {
-      setActionError(`Hourly price for ${car.name} must be a non-negative number.`);
+    if (p24 === null || !Number.isFinite(p24) || p24 <= 0) {
+      setActionError(`Please enter a valid 24h price for ${car.name}.`);
       return;
     }
     if (deposit !== null && (!Number.isFinite(deposit) || deposit < 0)) {
@@ -207,18 +180,14 @@ export function AdminDashboardPage() {
     try {
       const res = await updateVehicle(
         car.id,
-        { dailyPrice: daily, hourlyPrice: hourly, securityDeposit: deposit },
+        { price12h: p12, price24h: p24, securityDeposit: deposit },
         detectedColumns
       );
       if (res.error) {
         setActionError(res.error);
         return;
       }
-      const skipped =
-        res.skippedFields.length > 0
-          ? ` (Skipped missing columns: ${res.skippedFields.join(', ')})`
-          : '';
-      setActionNotice(`Updated rental pricing for "${car.name}".${skipped}`);
+      setActionNotice(`Updated 12h/24h rental pricing for "${car.name}".`);
       reload();
     } finally {
       setBusyVehicleId(null);
@@ -339,7 +308,6 @@ export function AdminDashboardPage() {
             </div>
           )}
 
-          {/* Error loading fleet */}
           {error ? (
             <div className="mt-6">
               <VehicleErrorState error={error} isConfigMissing={isConfigMissing} onRetry={reload} />
@@ -349,7 +317,6 @@ export function AdminDashboardPage() {
               {/* 1. OVERVIEW */}
               {activeSection === 'overview' && (
                 <div className="space-y-6">
-                  {/* Real Database KPI Strip */}
                   <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                     <div className="rounded-xl border border-slate-200 bg-white p-5">
                       <p className="text-xs font-medium text-slate-500">Total Vehicles</p>
@@ -358,21 +325,21 @@ export function AdminDashboardPage() {
                       </p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white p-5">
-                      <p className="text-xs font-medium text-slate-500">Active Vehicles</p>
+                      <p className="text-xs font-medium text-slate-500">Active (Bookable)</p>
                       <p className="mt-2 font-display text-3xl font-bold text-[#15803D] tabular-nums">
                         {loading ? '—' : stats.active}
                       </p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white p-5">
-                      <p className="text-xs font-medium text-slate-500">Inactive Vehicles</p>
+                      <p className="text-xs font-medium text-slate-500">Inactive</p>
                       <p className="mt-2 font-display text-3xl font-bold text-slate-600 tabular-nums">
                         {loading ? '—' : stats.inactive}
                       </p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white p-5">
-                      <p className="text-xs font-medium text-slate-500">Available Vehicles</p>
+                      <p className="text-xs font-medium text-slate-500">Starting 24h Rate</p>
                       <p className="mt-2 font-display text-3xl font-bold text-[#1D4ED8] tabular-nums">
-                        {loading ? '—' : stats.available}
+                        {loading ? '—' : stats.starting24h !== null ? formatINR(stats.starting24h) : '—'}
                       </p>
                     </div>
                   </div>
@@ -412,9 +379,9 @@ export function AdminDashboardPage() {
                             <tr>
                               <th className="px-5 py-3">Vehicle</th>
                               <th className="px-4 py-3">Specs</th>
-                              <th className="px-4 py-3 text-right">Daily Rate</th>
-                              <th className="px-4 py-3">Availability</th>
-                              <th className="px-4 py-3">Visibility</th>
+                              <th className="px-4 py-3 text-right">12h Rate</th>
+                              <th className="px-4 py-3 text-right">24h Rate</th>
+                              <th className="px-4 py-3">Status</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
@@ -427,15 +394,13 @@ export function AdminDashboardPage() {
                                     .join(' · ')}
                                 </td>
                                 <td className="px-4 py-3.5 text-right font-semibold text-[#0B1F3A] tabular-nums">
-                                  {car.dailyPrice !== null ? formatINR(car.dailyPrice) : '—'}
+                                  {car.price12h !== null ? formatINR(car.price12h) : '—'}
+                                </td>
+                                <td className="px-4 py-3.5 text-right font-semibold text-[#0B1F3A] tabular-nums">
+                                  {car.price24h !== null ? formatINR(car.price24h) : '—'}
                                 </td>
                                 <td className="px-4 py-3.5 text-xs font-medium">
-                                  <span className={car.isAvailable ? 'text-[#15803D]' : 'text-amber-700'}>
-                                    {car.isAvailable ? 'Available' : 'Unavailable'}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3.5 text-xs font-medium">
-                                  <span className={car.isActive ? 'text-[#1D4ED8]' : 'text-slate-500'}>
+                                  <span className={car.isActive ? 'text-[#15803D]' : 'text-slate-500'}>
                                     {car.isActive ? 'Active' : 'Inactive'}
                                   </span>
                                 </td>
@@ -462,7 +427,7 @@ export function AdminDashboardPage() {
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search vehicle or reg no..."
+                        placeholder="Search make, model, or reg no..."
                         className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
                       />
                     </div>
@@ -477,19 +442,6 @@ export function AdminDashboardPage() {
                         <option value="all">All Statuses</option>
                         <option value="active">Active Only</option>
                         <option value="inactive">Inactive Only</option>
-                      </select>
-
-                      <select
-                        value={availabilityFilter}
-                        onChange={(e) =>
-                          setAvailabilityFilter(e.target.value as 'all' | 'available' | 'unavailable')
-                        }
-                        aria-label="Filter by availability"
-                        className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-[#0B1F3A]"
-                      >
-                        <option value="all">All Availability</option>
-                        <option value="available">Available</option>
-                        <option value="unavailable">Unavailable</option>
                       </select>
                     </div>
                   </div>
@@ -508,9 +460,8 @@ export function AdminDashboardPage() {
                             <tr>
                               <th className="px-5 py-3.5">Vehicle</th>
                               <th className="px-4 py-3.5">Specs</th>
-                              <th className="px-4 py-3.5 text-right">Daily Price</th>
-                              <th className="px-4 py-3.5">Availability</th>
-                              <th className="px-4 py-3.5">Active</th>
+                              <th className="px-4 py-3.5 text-right">12h / 24h</th>
+                              <th className="px-4 py-3.5">Status</th>
                               <th className="px-5 py-3.5 text-right">Actions</th>
                             </tr>
                           </thead>
@@ -530,8 +481,10 @@ export function AdminDashboardPage() {
                                       </div>
                                       <div className="min-w-0">
                                         <div className="font-semibold text-[#0B1F3A]">{car.name}</div>
-                                        <div className="text-xs text-slate-500">
-                                          {[car.category, car.registrationNumber].filter(Boolean).join(' · ')}
+                                        <div className="text-xs text-slate-500 tabular-nums">
+                                          {[car.year ? `${car.year}` : '', car.registrationNumber]
+                                            .filter(Boolean)
+                                            .join(' · ')}
                                         </div>
                                       </div>
                                     </div>
@@ -541,22 +494,13 @@ export function AdminDashboardPage() {
                                       .filter(Boolean)
                                       .join(' · ')}
                                   </td>
-                                  <td className="px-4 py-3.5 text-right font-semibold text-[#0B1F3A] tabular-nums">
-                                    {car.dailyPrice !== null ? formatINR(car.dailyPrice) : '—'}
-                                  </td>
-                                  <td className="px-4 py-3.5">
-                                    <button
-                                      type="button"
-                                      disabled={isBusy}
-                                      onClick={() => void handleToggleAvailable(car)}
-                                      className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                                        car.isAvailable
-                                          ? 'border-emerald-200 bg-emerald-50 text-[#166534] hover:bg-emerald-100'
-                                          : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                                      }`}
-                                    >
-                                      {car.isAvailable ? 'Available' : 'Unavailable'}
-                                    </button>
+                                  <td className="px-4 py-3.5 text-right tabular-nums">
+                                    <div className="font-semibold text-[#0B1F3A]">
+                                      {car.price24h !== null ? `${formatINR(car.price24h)} / 24h` : '—'}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      {car.price12h !== null ? `${formatINR(car.price12h)} / 12h` : '—'}
+                                    </div>
                                   </td>
                                   <td className="px-4 py-3.5">
                                     <button
@@ -565,7 +509,7 @@ export function AdminDashboardPage() {
                                       onClick={() => void handleToggleActive(car)}
                                       className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
                                         car.isActive
-                                          ? 'border-blue-200 bg-blue-50 text-[#1D4ED8] hover:bg-blue-100'
+                                          ? 'border-emerald-200 bg-emerald-50 text-[#166534] hover:bg-emerald-100'
                                           : 'border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200'
                                       }`}
                                     >
@@ -680,74 +624,13 @@ export function AdminDashboardPage() {
               {/* MANAGE BOOKINGS */}
               {activeSection === 'bookings' && <AdminBookingsManager />}
 
-              {/* 6. VEHICLE AVAILABILITY */}
-              {activeSection === 'availability' && (
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                  <div className="border-b border-slate-100 px-5 py-4">
-                    <h2 className="font-display text-base font-bold text-[#0B1F3A]">
-                      Availability & Visibility Controls
-                    </h2>
-                    <p className="mt-1 text-xs text-slate-600">
-                      Toggle pickup availability or activate/deactivate cars across customer listings.
-                    </p>
-                  </div>
-
-                  <div className="divide-y divide-slate-100">
-                    {vehicles.map((car) => {
-                      const isBusy = busyVehicleId === car.id;
-                      return (
-                        <div
-                          key={car.id}
-                          className="flex flex-col justify-between gap-4 px-5 py-4 sm:flex-row sm:items-center"
-                        >
-                          <div>
-                            <p className="font-semibold text-[#0B1F3A]">{car.name}</p>
-                            <p className="text-xs text-slate-500">
-                              {[car.registrationNumber, car.fuelType, car.transmission].filter(Boolean).join(' · ')}
-                            </p>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-3">
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => void handleToggleAvailable(car)}
-                              className={`min-h-[38px] rounded-lg border px-3.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                                car.isAvailable
-                                  ? 'border-emerald-200 bg-emerald-50 text-[#166534]'
-                                  : 'border-amber-200 bg-amber-50 text-amber-800'
-                              }`}
-                            >
-                              {car.isAvailable ? 'Available for Pickup' : 'Marked Unavailable'}
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => void handleToggleActive(car)}
-                              className={`min-h-[38px] rounded-lg border px-3.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                                car.isActive
-                                  ? 'border-blue-200 bg-blue-50 text-[#1D4ED8]'
-                                  : 'border-slate-300 bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {car.isActive ? 'Active (Visible)' : 'Inactive (Hidden)'}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {/* 7. RENTAL PRICING */}
               {activeSection === 'pricing' && (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="border-b border-slate-100 px-5 py-4">
                     <h2 className="font-display text-base font-bold text-[#0B1F3A]">Rental Pricing Schedule</h2>
                     <p className="mt-1 text-xs text-slate-600">
-                      Update daily rates, hourly rates, and refundable security deposits in Indian Rupees (₹).
+                      Update 12-hour rates, 24-hour rates, and refundable security deposits in Indian Rupees (₹).
                     </p>
                   </div>
 
@@ -756,8 +639,8 @@ export function AdminDashboardPage() {
                       <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
                         <tr>
                           <th className="px-5 py-3">Vehicle</th>
-                          <th className="px-4 py-3">Daily Price (₹)</th>
-                          <th className="px-4 py-3">Hourly Price (₹)</th>
+                          <th className="px-4 py-3">12h Price (₹)</th>
+                          <th className="px-4 py-3">24h Price (₹)</th>
                           <th className="px-4 py-3">Security Deposit (₹)</th>
                           <th className="px-5 py-3 text-right">Save</th>
                         </tr>
@@ -772,14 +655,14 @@ export function AdminDashboardPage() {
                               <td className="px-4 py-3.5">
                                 <input
                                   type="number"
-                                  min={0}
+                                  min={1}
                                   step="50"
-                                  aria-label={`Daily price for ${car.name}`}
-                                  value={draft.daily}
+                                  aria-label={`12h price for ${car.name}`}
+                                  value={draft.price12h}
                                   onChange={(e) =>
                                     setPricingDrafts((prev) => ({
                                       ...prev,
-                                      [car.id]: { ...draft, daily: e.target.value },
+                                      [car.id]: { ...draft, price12h: e.target.value },
                                     }))
                                   }
                                   className="h-9 w-28 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-[#0B1F3A] tabular-nums"
@@ -788,17 +671,16 @@ export function AdminDashboardPage() {
                               <td className="px-4 py-3.5">
                                 <input
                                   type="number"
-                                  min={0}
-                                  step="10"
-                                  aria-label={`Hourly price for ${car.name}`}
-                                  value={draft.hourly}
+                                  min={1}
+                                  step="50"
+                                  aria-label={`24h price for ${car.name}`}
+                                  value={draft.price24h}
                                   onChange={(e) =>
                                     setPricingDrafts((prev) => ({
                                       ...prev,
-                                      [car.id]: { ...draft, hourly: e.target.value },
+                                      [car.id]: { ...draft, price24h: e.target.value },
                                     }))
                                   }
-                                  placeholder="—"
                                   className="h-9 w-28 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-[#0B1F3A] tabular-nums"
                                 />
                               </td>
@@ -889,16 +771,14 @@ export function AdminDashboardPage() {
                     <div className="flex items-center gap-2">
                       <Database className="h-5 w-5 text-[#1D4ED8]" aria-hidden="true" />
                       <h2 className="font-display text-lg font-bold text-[#0B1F3A]">
-                        Detected Schema & Storage
+                        Verified Schema &amp; Storage
                       </h2>
                     </div>
                     <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                      Columns detected on your live <code className="font-mono font-semibold">vehicles</code> table:
+                      Actual <code className="font-mono font-semibold">public.vehicles</code> columns:
                     </p>
                     <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-[#0B1F3A]">
-                      {detectedColumns.length > 0
-                        ? detectedColumns.join(', ')
-                        : 'No columns inspected yet.'}
+                      {detectedColumns.join(', ')}
                     </div>
                     <p className="mt-4 text-xs leading-relaxed text-slate-600">
                       Columns detected on your <code className="font-mono font-semibold">profiles</code> row (ID key:{' '}
@@ -909,17 +789,6 @@ export function AdminDashboardPage() {
                         ? profile.availableColumns.join(', ')
                         : 'No profile row columns detected yet.'}
                     </div>
-                    <p className="mt-4 text-xs leading-relaxed text-slate-600">
-                      To add missing optional columns (<code className="font-mono">hourly_price</code>,{' '}
-                      <code className="font-mono">security_deposit</code>,{' '}
-                      <code className="font-mono">registration_number</code>,{' '}
-                      <code className="font-mono">is_active</code>, <code className="font-mono">images</code>), admin
-                      RLS policies, or the <code className="font-mono">vehicle-images</code> bucket, review and run{' '}
-                      <code className="font-mono font-semibold text-[#1D4ED8]">
-                        supabase/migrations/phase4_admin_vehicles_storage.sql
-                      </code>{' '}
-                      in your Supabase SQL Editor.
-                    </p>
                   </div>
                 </div>
               )}

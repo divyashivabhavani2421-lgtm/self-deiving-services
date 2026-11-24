@@ -45,6 +45,9 @@ function normalizePickupType(value: unknown): PickupType {
 
 function mapBookingRow(row: RawRow): BookingRecord {
   const vehicleObj = (row.vehicles as RawRow | null | undefined) ?? null;
+  const make = readString(row.vehicle_brand ?? vehicleObj?.make);
+  const model = readString(row.vehicle_model ?? vehicleObj?.model);
+  const combinedMakeModel = [make, model].filter(Boolean).join(' ').trim();
 
   return {
     id: readString(row.id),
@@ -62,10 +65,10 @@ function mapBookingRow(row: RawRow): BookingRecord {
     status: normalizeStatus(row.status),
     notes: readString(row.notes) || null,
     createdAt: readString(row.created_at),
-    vehicleName: readString(row.vehicle_name ?? vehicleObj?.name) || undefined,
-    vehicleBrand: readString(row.vehicle_brand ?? vehicleObj?.brand) || undefined,
-    vehicleModel: readString(row.vehicle_model ?? vehicleObj?.model) || undefined,
-    vehicleSlug: readString(row.vehicle_slug ?? vehicleObj?.slug) || undefined,
+    vehicleName: readString(row.vehicle_name) || combinedMakeModel || undefined,
+    vehicleBrand: make || undefined,
+    vehicleModel: model || undefined,
+    vehicleSlug: readString(row.vehicle_slug) || undefined,
     vehicleImageUrl: readString(row.vehicle_image_url ?? vehicleObj?.image_url) || undefined,
     vehicleFuelType: readString(row.vehicle_fuel_type ?? vehicleObj?.fuel_type) || undefined,
     vehicleTransmission:
@@ -265,7 +268,7 @@ export async function fetchMyBookings(
   // Graceful fallback to direct RLS-protected table select if Phase 5 RPC is not run yet
   const fallbackRes = await supabase
     .from('bookings')
-    .select('*, vehicles(name, brand, model, image_url)')
+    .select('*, vehicles(id, make, model, image_url, fuel_type, transmission, registration_number)')
     .eq('user_id', userId)
     .order('start_date', { ascending: false });
 
@@ -362,7 +365,7 @@ export async function fetchAllBookingsAdmin(): Promise<{
   // Fallback query under admin SELECT policy
   const fallbackRes = await supabase
     .from('bookings')
-    .select('*, vehicles(name, brand, model, image_url), profiles(full_name, phone)')
+    .select('*, vehicles(id, make, model, image_url, registration_number), profiles(full_name, phone)')
     .order('created_at', { ascending: false });
 
   if (fallbackRes.error) {

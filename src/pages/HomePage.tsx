@@ -37,10 +37,6 @@ export function HomePage() {
   const { vehicles, loading, error, isConfigMissing, reload } = useVehicles();
 
   const featuredVehicles = useMemo(() => {
-    const explicitlyFeatured = vehicles.filter((car) => car.featured);
-    if (explicitlyFeatured.length > 0) {
-      return explicitlyFeatured.slice(0, 3);
-    }
     return vehicles.slice(0, 3);
   }, [vehicles]);
 

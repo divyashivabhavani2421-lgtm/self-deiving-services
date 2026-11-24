@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'reac
 import {
   AlertCircle,
   ArrowLeft,
-  Briefcase,
   CalendarCheck2,
   CheckCircle2,
   FileCheck2,
@@ -27,13 +26,16 @@ import {
   addHoursInIST,
   calculateBookingPricePreview,
   calculateDurationHours,
+  calculateElapsedMs,
   formatDurationLabel,
   formatINR,
   formatISTDateTime,
   getDefaultSearchParams,
   getTodayInputDate,
   hasBookingOverlap,
+  HOURS_24_MS,
   MIN_RENTAL_HOURS,
+  MIN_RENTAL_MS,
   toISTTimestampIso,
 } from '../utils/rentalUtils';
 import { VehicleImage } from '../components/VehicleImage';
@@ -45,7 +47,7 @@ export function VehicleDetailPage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [storageImages, setStorageImages] = useState<string[]>([]);
@@ -63,7 +65,7 @@ export function VehicleDetailPage() {
   const initialReturnDate = searchParams.get('returnDate') || defaults.returnDate;
   const initialReturnTime = searchParams.get('returnTime') || defaults.returnTime;
 
-  const initialHours = calculateDurationHours({
+  const initialElapsedMs = calculateElapsedMs({
     pickupDate: initialPickupDate,
     pickupTime: initialPickupTime,
     returnDate: initialReturnDate,
@@ -75,7 +77,11 @@ export function VehicleDetailPage() {
   const [returnDate, setReturnDate] = useState(initialReturnDate);
   const [returnTime, setReturnTime] = useState(initialReturnTime);
   const [rentalDuration, setRentalDuration] = useState<RentalDurationType>(
-    initialHours === 12 ? '12h' : initialHours === 24 ? '24h' : 'custom'
+    initialElapsedMs === MIN_RENTAL_MS
+      ? '12h'
+      : initialElapsedMs === HOURS_24_MS
+        ? '24h'
+        : 'custom'
   );
   const [pickupType, setPickupType] = useState<PickupType>('hub_pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
@@ -191,10 +197,17 @@ export function VehicleDetailPage() {
     [returnDate, returnTime]
   );
 
+  const elapsedMs = useMemo(
+    () => calculateElapsedMs({ pickupDate, pickupTime, returnDate, returnTime }),
+    [pickupDate, pickupTime, returnDate, returnTime]
+  );
+
   const durationHours = useMemo(
     () => calculateDurationHours({ pickupDate, pickupTime, returnDate, returnTime }),
     [pickupDate, pickupTime, returnDate, returnTime]
   );
+
+  const hasValidMinDuration = elapsedMs !== null && elapsedMs >= MIN_RENTAL_MS;
 
   const isStartInPast = useMemo(() => {
     if (!startIso) return false;
@@ -207,16 +220,18 @@ export function VehicleDetailPage() {
   }, [bookedSlots, startIso, endIso]);
 
   const priceBreakdown = useMemo(() => {
-    if (!vehicle || durationHours === null || durationHours < MIN_RENTAL_HOURS) {
+    if (!vehicle || durationHours === null || !hasValidMinDuration) {
       return null;
     }
     return calculateBookingPricePreview({
-      dailyPrice: vehicle.dailyPrice,
-      hourlyPrice: vehicle.hourlyPrice,
+      price12h: vehicle.price12h,
+      price24h: vehicle.price24h,
       durationHours,
+      elapsedMs,
+      rentalDuration,
       pickupType,
     });
-  }, [vehicle, durationHours, pickupType]);
+  }, [vehicle, durationHours, hasValidMinDuration, elapsedMs, rentalDuration, pickupType]);
 
   if (loading) {
     return (
@@ -260,7 +275,7 @@ export function VehicleDetailPage() {
       <div className="mx-auto max-w-3xl px-4 py-20 text-center sm:px-6">
         <h1 className="font-display text-2xl font-bold text-[#0B1F3A]">Vehicle Not Found</h1>
         <p className="mt-3 text-sm text-slate-600">
-          The requested car is either unavailable or not currently active in our Siddipet fleet.
+          The requested car is either inactive or not currently available in our Siddipet fleet.
         </p>
         <Link
           to="/cars"
@@ -272,6 +287,8 @@ export function VehicleDetailPage() {
       </div>
     );
   }
+
+  const displayName = [vehicle.make, vehicle.model].filter(Boolean).join(' ') || vehicle.name;
 
   const handleBookingSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -287,8 +304,8 @@ export function VehicleDetailPage() {
       return;
     }
 
-    if (!vehicle.isActive || !vehicle.isAvailable) {
-      setBookingError('This vehicle is currently marked unavailable for online booking.');
+    if (!vehicle.isActive) {
+      setBookingError('This vehicle is currently inactive and cannot be booked online.');
       return;
     }
 
@@ -302,8 +319,8 @@ export function VehicleDetailPage() {
       return;
     }
 
-    if (durationHours === null || durationHours < MIN_RENTAL_HOURS) {
-      setBookingError(`Minimum rental duration is ${MIN_RENTAL_HOURS} hours.`);
+    if (!hasValidMinDuration) {
+      setBookingError(`Minimum rental duration is ${MIN_RENTAL_HOURS} full hours.`);
       return;
     }
 
@@ -319,13 +336,20 @@ export function VehicleDetailPage() {
       return;
     }
 
+    const effectiveDuration: RentalDurationType =
+      rentalDuration === '12h' && elapsedMs === MIN_RENTAL_MS
+        ? '12h'
+        : rentalDuration === '24h' && elapsedMs === HOURS_24_MS
+          ? '24h'
+          : 'custom';
+
     setSubmitting(true);
     try {
       const res = await createBooking({
         vehicleId: vehicle.id,
         startDateIso: startIso,
         endDateIso: endIso,
-        rentalDuration,
+        rentalDuration: effectiveDuration,
         pickupType,
         deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
         notes: notes.trim() || undefined,
@@ -333,7 +357,6 @@ export function VehicleDetailPage() {
 
       if (res.error || !res.booking) {
         setBookingError(res.error || 'Could not complete your booking. Please try again.');
-        // Refresh booked slots in case a concurrent booking just succeeded
         const slotsRes = await fetchVehicleBookedSlots(vehicle.id);
         setBookedSlots(slotsRes.slots);
         return;
@@ -349,11 +372,19 @@ export function VehicleDetailPage() {
     }
   };
 
-  const rateText = vehicle.dailyPrice !== null ? ` at ${formatINR(vehicle.dailyPrice)}/day` : '';
+  const rateText =
+    vehicle.price24h !== null
+      ? ` at ${formatINR(vehicle.price24h)}/24h`
+      : vehicle.price12h !== null
+        ? ` at ${formatINR(vehicle.price12h)}/12h`
+        : '';
   const specsText = [vehicle.fuelType, vehicle.transmission].filter(Boolean).join(', ');
-  const whatsappMessage = `Hello Siddipet Self Drive Cars, I am interested in renting the ${vehicle.name}${specsText ? ` (${specsText})` : ''}${rateText} from ${pickupDate} (${pickupTime} IST) to ${returnDate} (${returnTime} IST). Please share availability.`;
+  const whatsappMessage = `Hello Siddipet Self Drive Cars, I am interested in renting the ${displayName}${specsText ? ` (${specsText})` : ''}${rateText} from ${pickupDate} (${pickupTime} IST) to ${returnDate} (${returnTime} IST). Please share availability.`;
 
-  const isBookable = vehicle.isActive && vehicle.isAvailable && priceBreakdown !== null;
+  const isBookable =
+    vehicle.isActive &&
+    hasValidMinDuration &&
+    priceBreakdown !== null;
 
   return (
     <div className="bg-white">
@@ -368,14 +399,14 @@ export function VehicleDetailPage() {
             Available Cars
           </Link>
           <span aria-hidden="true">/</span>
-          <span className="font-medium text-[#0B1F3A]">{vehicle.name}</span>
+          <span className="font-medium text-[#0B1F3A]">{displayName}</span>
         </nav>
 
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
           {/* Left Column: Image Gallery, Specs, Overview & Reserved Slots */}
           <div className="lg:col-span-7">
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-              <VehicleImage src={selectedImage} alt={`${vehicle.name} photo`} />
+              <VehicleImage src={selectedImage} alt={`${displayName} photo`} />
             </div>
 
             {galleryImages.length > 1 && (
@@ -385,7 +416,7 @@ export function VehicleDetailPage() {
                     key={imgUrl}
                     type="button"
                     onClick={() => setSelectedImage(imgUrl)}
-                    aria-label={`View photo ${idx + 1} of ${vehicle.name}`}
+                    aria-label={`View photo ${idx + 1} of ${displayName}`}
                     className={`overflow-hidden rounded-lg border transition-all ${
                       selectedImage === imgUrl
                         ? 'border-[#1D4ED8] ring-2 ring-[#1D4ED8]/30'
@@ -394,7 +425,7 @@ export function VehicleDetailPage() {
                   >
                     <VehicleImage
                       src={imgUrl}
-                      alt={`${vehicle.name} thumbnail ${idx + 1}`}
+                      alt={`${displayName} thumbnail ${idx + 1}`}
                       aspectClassName="aspect-[4/3]"
                     />
                   </button>
@@ -436,18 +467,8 @@ export function VehicleDetailPage() {
                   <div className="flex items-center gap-2.5">
                     <Gauge className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                     <div>
-                      <dt className="text-xs text-slate-500">Fuel Economy</dt>
+                      <dt className="text-xs text-slate-500">Mileage</dt>
                       <dd className="font-semibold text-[#0B1F3A] tabular-nums">{vehicle.mileage}</dd>
-                    </div>
-                  </div>
-                )}
-
-                {vehicle.luggageCapacity && (
-                  <div className="flex items-center gap-2.5">
-                    <Briefcase className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
-                    <div>
-                      <dt className="text-xs text-slate-500">Boot Space</dt>
-                      <dd className="font-semibold text-[#0B1F3A]">{vehicle.luggageCapacity}</dd>
                     </div>
                   </div>
                 )}
@@ -466,7 +487,7 @@ export function VehicleDetailPage() {
                   <MapPin className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                   <div>
                     <dt className="text-xs text-slate-500">Pickup Hub</dt>
-                    <dd className="font-semibold text-[#0B1F3A]">{vehicle.pickupLocation || 'Siddipet, TS'}</dd>
+                    <dd className="font-semibold text-[#0B1F3A]">Siddipet, TS</dd>
                   </div>
                 </div>
               </dl>
@@ -479,11 +500,11 @@ export function VehicleDetailPage() {
               </div>
             ) : null}
 
-            {vehicle.highlights.length > 0 && (
+            {vehicle.features.length > 0 && (
               <div className="mt-8 border-t border-slate-200 pt-8">
                 <h2 className="font-display text-xl font-bold text-[#0B1F3A]">Features &amp; Comfort</h2>
                 <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {vehicle.highlights.map((feature) => (
+                  {vehicle.features.map((feature) => (
                     <li key={feature} className="flex items-start gap-2.5 text-sm text-slate-700">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
                       <span>{feature}</span>
@@ -534,43 +555,49 @@ export function VehicleDetailPage() {
             </div>
           </div>
 
-          {/* Right Column: Contiguous Booking & Pricing Module */}
+          {/* Right Column: Booking & Pricing Module */}
           <div className="lg:col-span-5">
             <div className="sticky top-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500">
                 <span>
-                  {vehicle.category}
+                  {vehicle.make}
                   {vehicle.year ? ` · ${vehicle.year} Model` : ''}
                 </span>
-                <span className={vehicle.isAvailable ? 'text-[#15803D]' : 'text-amber-700'}>
-                  {vehicle.isAvailable ? 'Available for Booking' : 'Currently Unavailable'}
+                <span className={vehicle.isActive ? 'text-[#15803D]' : 'text-amber-700'}>
+                  {vehicle.isActive ? 'Active in Fleet' : 'Currently Inactive'}
                 </span>
               </div>
-              <h1 className="mt-1 font-display text-2xl font-bold text-[#0B1F3A] sm:text-3xl">{vehicle.name}</h1>
+              <h1 className="mt-1 font-display text-2xl font-bold text-[#0B1F3A] sm:text-3xl">{displayName}</h1>
 
               <div className="mt-4 border-b border-slate-100 pb-4">
-                <div className="flex items-baseline gap-2">
-                  {vehicle.dailyPrice !== null ? (
-                    <>
+                <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2">
+                  {vehicle.price24h !== null ? (
+                    <div className="flex items-baseline gap-1.5">
                       <span className="font-display text-3xl font-extrabold text-[#0B1F3A] tabular-nums">
-                        {formatINR(vehicle.dailyPrice)}
+                        {formatINR(vehicle.price24h)}
                       </span>
-                      <span className="text-sm font-medium text-slate-500">per day (24 hrs)</span>
-                    </>
-                  ) : (
+                      <span className="text-sm font-medium text-slate-500">/ 24 hrs</span>
+                    </div>
+                  ) : null}
+
+                  {vehicle.price12h !== null ? (
+                    <div className="flex items-baseline gap-1">
+                      <span className="font-display text-xl font-bold text-[#1D4ED8] tabular-nums">
+                        {formatINR(vehicle.price12h)}
+                      </span>
+                      <span className="text-xs font-medium text-slate-500">/ 12 hrs</span>
+                    </div>
+                  ) : null}
+
+                  {vehicle.price24h === null && vehicle.price12h === null && (
                     <span className="text-base font-semibold text-slate-700">Rate on inquiry</span>
                   )}
                 </div>
 
-                {(vehicle.hourlyPrice !== null || vehicle.securityDeposit !== null) && (
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 tabular-nums">
-                    {vehicle.hourlyPrice !== null && (
-                      <span>Hourly Rate: {formatINR(vehicle.hourlyPrice)}/hr</span>
-                    )}
-                    {vehicle.securityDeposit !== null && (
-                      <span>Refundable Deposit: {formatINR(vehicle.securityDeposit)}</span>
-                    )}
-                  </div>
+                {vehicle.securityDeposit !== null && (
+                  <p className="mt-2 text-xs text-slate-600 tabular-nums">
+                    Refundable Security Deposit at Pickup: <strong>{formatINR(vehicle.securityDeposit)}</strong> (not included in online booking total)
+                  </p>
                 )}
               </div>
 
@@ -801,13 +828,21 @@ export function VehicleDetailPage() {
                   </div>
 
                   {/* Validation / Overlap Banner */}
-                  {durationHours === null ? (
+                  {!vehicle.isActive ? (
+                    <p className="text-xs font-medium text-amber-800">
+                      This vehicle is currently inactive and unavailable for online booking.
+                    </p>
+                  ) : (vehicle.price12h ?? 0) <= 0 && (vehicle.price24h ?? 0) <= 0 ? (
+                    <p className="text-xs font-medium text-amber-800">
+                      Rental pricing is not configured for this vehicle yet. Please inquire on WhatsApp.
+                    </p>
+                  ) : elapsedMs === null ? (
                     <p className="text-xs font-medium text-red-700">
                       Return date &amp; time must be after pickup date &amp; time.
                     </p>
-                  ) : durationHours < MIN_RENTAL_HOURS ? (
+                  ) : !hasValidMinDuration ? (
                     <p className="text-xs font-medium text-red-700">
-                      Minimum rental duration is {MIN_RENTAL_HOURS} hours (selected: {durationHours} hrs).
+                      Minimum rental duration is {MIN_RENTAL_HOURS} full hours.
                     </p>
                   ) : isStartInPast ? (
                     <p className="text-xs font-medium text-red-700">
@@ -855,7 +890,7 @@ export function VehicleDetailPage() {
                         </div>
                       </div>
                       <p className="mt-2 text-[11px] text-slate-500">
-                        Final price and availability are verified on the server upon submission.
+                        Calculated from 12h &amp; 24h vehicle rates. Security deposit is collected separately at handover.
                       </p>
                     </div>
                   )}
@@ -868,7 +903,16 @@ export function VehicleDetailPage() {
                   )}
 
                   <div className="space-y-2.5 pt-1">
-                    {user ? (
+                    {authLoading ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-[#0B1F3A] px-5 py-2.5 text-sm font-semibold text-white opacity-70"
+                      >
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        <span>Checking Session...</span>
+                      </button>
+                    ) : user ? (
                       <button
                         type="submit"
                         disabled={submitting || !isBookable || isStartInPast || Boolean(overlappingSlot)}
@@ -882,8 +926,8 @@ export function VehicleDetailPage() {
                         <span>
                           {submitting
                             ? 'Confirming Availability...'
-                            : !vehicle.isAvailable
-                              ? 'Currently Unavailable'
+                            : !vehicle.isActive
+                              ? 'Currently Inactive'
                               : 'Request Booking'}
                         </span>
                       </button>

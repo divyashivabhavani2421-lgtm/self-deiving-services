@@ -5,10 +5,12 @@ import { RentalSearchParams } from '../types/vehicle';
 import {
   buildSearchQueryString,
   calculateDurationHours,
+  calculateElapsedMs,
   formatDurationLabel,
   getDefaultSearchParams,
   getTodayInputDate,
   MIN_RENTAL_HOURS,
+  MIN_RENTAL_MS,
   toISTTimestampIso,
 } from '../utils/rentalUtils';
 
@@ -61,6 +63,7 @@ export function VehicleSearchBar({
   const [error, setError] = useState('');
 
   const durationHours = calculateDurationHours({ pickupDate, pickupTime, returnDate, returnTime });
+  const elapsedMs = calculateElapsedMs({ pickupDate, pickupTime, returnDate, returnTime });
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -77,9 +80,9 @@ export function VehicleSearchBar({
       return;
     }
 
-    const hours = calculateDurationHours({ pickupDate, pickupTime, returnDate, returnTime });
-    if (hours === null || hours < MIN_RENTAL_HOURS) {
-      setError(`Minimum rental duration is ${MIN_RENTAL_HOURS} hours.`);
+    const currentElapsedMs = calculateElapsedMs({ pickupDate, pickupTime, returnDate, returnTime });
+    if (currentElapsedMs === null || currentElapsedMs < MIN_RENTAL_MS) {
+      setError(`Minimum rental duration is ${MIN_RENTAL_HOURS} full hours.`);
       return;
     }
 
@@ -108,7 +111,7 @@ export function VehicleSearchBar({
             Pickup &amp; Return in Siddipet, Telangana · Times in IST (Asia/Kolkata)
           </p>
         </div>
-        {durationHours !== null && durationHours >= MIN_RENTAL_HOURS && (
+        {durationHours !== null && elapsedMs !== null && elapsedMs >= MIN_RENTAL_MS && (
           <div className="text-xs font-medium text-[#1D4ED8] tabular-nums sm:text-sm">
             Trip Duration: {formatDurationLabel(durationHours)}
           </div>

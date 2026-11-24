@@ -7,9 +7,10 @@ import { RentalSearchParams } from '../types/vehicle';
 import {
   buildSearchQueryString,
   calculateDurationHours,
+  calculateElapsedMs,
   formatDurationLabel,
   formatISTDateTime,
-  MIN_RENTAL_HOURS,
+  MIN_RENTAL_MS,
   toISTTimestampIso,
 } from '../utils/rentalUtils';
 import { VehicleCard } from '../components/VehicleCard';
@@ -56,7 +57,8 @@ export function CarsPage() {
       initialSchedule.returnTime || '09:00'
     );
     const durationHours = calculateDurationHours(initialSchedule);
-    if (!startIso || !endIso || durationHours === null || durationHours < MIN_RENTAL_HOURS) {
+    const elapsedMs = calculateElapsedMs(initialSchedule);
+    if (!startIso || !endIso || durationHours === null || elapsedMs === null || elapsedMs < MIN_RENTAL_MS) {
       return null;
     }
     return { startIso, endIso, durationHours };
@@ -131,7 +133,7 @@ export function CarsPage() {
       return vehicles;
     }
     return vehicles.filter(
-      (car) => car.isActive && car.isAvailable && !bookedVehicleIds.has(car.id)
+      (car) => car.isActive && !bookedVehicleIds.has(car.id)
     );
   }, [vehicles, scheduleIsoWindow, bookedVehicleIds]);
 
@@ -156,8 +158,9 @@ export function CarsPage() {
       if (
         normalizedQuery &&
         !car.name.toLowerCase().includes(normalizedQuery) &&
-        !car.category.toLowerCase().includes(normalizedQuery) &&
-        !car.brand.toLowerCase().includes(normalizedQuery)
+        !car.make.toLowerCase().includes(normalizedQuery) &&
+        !car.model.toLowerCase().includes(normalizedQuery) &&
+        !car.registrationNumber.toLowerCase().includes(normalizedQuery)
       ) {
         return false;
       }
@@ -166,11 +169,15 @@ export function CarsPage() {
 
     if (sortOrder === 'price-asc') {
       return [...list].sort(
-        (a, b) => (a.dailyPrice ?? Number.MAX_SAFE_INTEGER) - (b.dailyPrice ?? Number.MAX_SAFE_INTEGER)
+        (a, b) =>
+          (a.price24h ?? a.price12h ?? Number.MAX_SAFE_INTEGER) -
+          (b.price24h ?? b.price12h ?? Number.MAX_SAFE_INTEGER)
       );
     }
     if (sortOrder === 'price-desc') {
-      return [...list].sort((a, b) => (b.dailyPrice ?? -1) - (a.dailyPrice ?? -1));
+      return [...list].sort(
+        (a, b) => (b.price24h ?? b.price12h ?? -1) - (a.price24h ?? a.price12h ?? -1)
+      );
     }
     return list;
   }, [availableForPeriodVehicles, query, fuelFilter, transmissionFilter, sortOrder]);
@@ -220,7 +227,7 @@ export function CarsPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by car name or category..."
+              placeholder="Search by make, model, or reg no..."
               aria-label="Search cars by model name"
               className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-[#0B1F3A] placeholder:text-slate-400 focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
             />
