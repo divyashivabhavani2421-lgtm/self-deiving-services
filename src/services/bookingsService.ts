@@ -8,6 +8,9 @@ import {
   CreateGuestBookingInput,
   PickupType,
   RentalDurationType,
+  WhatsAppNotificationEvent,
+  WhatsAppNotificationEventType,
+  WhatsAppNotificationStatus,
 } from '../types/booking';
 
 type RawRow = Record<string, unknown>;
@@ -84,6 +87,7 @@ function mapBookingRow(row: RawRow): BookingRecord {
     totalAmount: readNumber(row.total_amount, 0),
     status: normalizeStatus(row.status),
     notes: readString(row.notes) || null,
+    whatsappOptIn: readBoolean(row.whatsapp_opt_in, false),
     createdAt: readString(row.created_at),
     vehicleName: readString(row.vehicle_name) || combinedMakeModel || undefined,
     vehicleBrand: make || undefined,
@@ -234,7 +238,7 @@ export async function createGuestBooking(
     return { booking: null, error: getMissingConfigError() };
   }
 
-  const { data, error } = await supabase.rpc('create_guest_booking', {
+  const baseParams = {
     p_vehicle_id: input.vehicleId,
     p_guest_name: input.guestName.trim(),
     p_guest_phone: input.guestPhone.trim(),
@@ -245,7 +249,25 @@ export async function createGuestBooking(
     p_delivery_address:
       input.pickupType === 'doorstep_delivery' ? (input.deliveryAddress?.trim() || null) : null,
     p_notes: input.notes?.trim() || null,
+  };
+
+  let { data, error } = await supabase.rpc('create_guest_booking', {
+    ...baseParams,
+    p_whatsapp_opt_in: Boolean(input.whatsappOptIn),
   });
+
+  // Preserve live compatibility before Step 6 SQL is run when opt-in is unchecked
+  if (error && isRpcMissingError(error) && !input.whatsappOptIn) {
+    const legacyRes = await supabase.rpc('create_guest_booking', baseParams);
+    data = legacyRes.data;
+    error = legacyRes.error;
+  } else if (error && isRpcMissingError(error) && input.whatsappOptIn) {
+    return {
+      booking: null,
+      error:
+        'WhatsApp opt-in database support is not deployed yet. Please run supabase/migrations/step6_whatsapp_notifications.sql in Supabase SQL Editor.',
+    };
+  }
 
   if (error) {
     return {
@@ -286,7 +308,7 @@ export async function createBooking(
     };
   }
 
-  const { data, error } = await supabase.rpc('create_booking', {
+  const baseParams = {
     p_vehicle_id: input.vehicleId,
     p_start_date: input.startDateIso,
     p_end_date: input.endDateIso,
@@ -295,7 +317,25 @@ export async function createBooking(
     p_delivery_address:
       input.pickupType === 'doorstep_delivery' ? (input.deliveryAddress?.trim() || null) : null,
     p_notes: input.notes?.trim() || null,
+  };
+
+  let { data, error } = await supabase.rpc('create_booking', {
+    ...baseParams,
+    p_whatsapp_opt_in: Boolean(input.whatsappOptIn),
+    p_contact_phone: input.contactPhone?.trim() || null,
   });
+
+  if (error && isRpcMissingError(error) && !input.whatsappOptIn) {
+    const legacyRes = await supabase.rpc('create_booking', baseParams);
+    data = legacyRes.data;
+    error = legacyRes.error;
+  } else if (error && isRpcMissingError(error) && input.whatsappOptIn) {
+    return {
+      booking: null,
+      error:
+        'WhatsApp opt-in database support is not deployed yet. Please run supabase/migrations/step6_whatsapp_notifications.sql in Supabase SQL Editor.',
+    };
+  }
 
   if (error) {
     return {
@@ -481,4 +521,167 @@ export async function updateBookingStatusAdmin(
     booking: null,
     error: formatBookingError(rpcRes.error, 'Could not update booking status.'),
   };
+}
+
+function normalizeWhatsAppStatus(value: unknown): WhatsAppNotificationStatus {
+  const s = readString(value).toLowerCase();
+  if (s === 'processing' || s === 'sent' || s === 'failed' || s === 'skipped') {
+    return s;
+  }
+  return 'pending';
+}
+
+function normalizeWhatsAppEventType(value: unknown): WhatsAppNotificationEventType {
+  return readString(value).toLowerCase() === 'booking_confirmed_customer'
+    ? 'booking_confirmed_customer'
+    : 'booking_created_admin';
+}
+
+function mapWhatsAppNotificationRow(row: RawRow): WhatsAppNotificationEvent {
+  const bookingId = readString(row.booking_id);
+  return {
+    id: readString(row.id),
+    bookingId,
+    bookingReference: readString(row.booking_reference) || formatFallbackReference(bookingId),
+    eventType: normalizeWhatsAppEventType(row.event_type),
+    recipientRole: readString(row.recipient_role).toLowerCase() === 'customer' ? 'customer' : 'admin',
+    recipientPhone: readString(row.recipient_phone),
+    templateKey: readString(row.template_key),
+    payload:
+      row.payload && typeof row.payload === 'object' ? (row.payload as Record<string, unknown>) : {},
+    status: normalizeWhatsAppStatus(row.status),
+    skipReason: readString(row.skip_reason) || null,
+    attemptCount: readNumber(row.attempt_count, 0),
+    maxAttempts: readNumber(row.max_attempts, 5),
+    lastAttemptAt: readString(row.last_attempt_at) || null,
+    nextRetryAt: readString(row.next_retry_at) || null,
+    sentAt: readString(row.sent_at) || null,
+    providerMessageId: readString(row.provider_message_id) || null,
+    lastError: readString(row.last_error) || null,
+    createdAt: readString(row.created_at),
+  };
+}
+
+/**
+ * Triggers the server-side `send-whatsapp-notifications` Supabase Edge Function.
+ * Never throws or blocks booking UX if Edge Functions or Meta credentials are not yet active.
+ */
+export async function triggerWhatsAppNotificationDispatch(params?: {
+  bookingId?: string;
+  eventId?: string;
+  eventType?: WhatsAppNotificationEventType;
+}): Promise<{
+  invoked: boolean;
+  queuedOnly: boolean;
+  sent: number;
+  failed: number;
+  message?: string;
+}> {
+  if (!supabase) {
+    return { invoked: false, queuedOnly: true, sent: 0, failed: 0 };
+  }
+
+  try {
+    const { data, error } = await supabase.functions.invoke('send-whatsapp-notifications', {
+      body: {
+        bookingId: params?.bookingId,
+        eventId: params?.eventId,
+        eventType: params?.eventType,
+      },
+    });
+
+    if (error || !data || typeof data !== 'object') {
+      return {
+        invoked: false,
+        queuedOnly: true,
+        sent: 0,
+        failed: 0,
+        message: error?.message,
+      };
+    }
+
+    const resObj = data as Record<string, unknown>;
+    return {
+      invoked: true,
+      queuedOnly: Boolean(resObj.queuedOnly),
+      sent: readNumber(resObj.sent, 0),
+      failed: readNumber(resObj.failed, 0),
+      message: readString(resObj.message) || undefined,
+    };
+  } catch {
+    return { invoked: false, queuedOnly: true, sent: 0, failed: 0 };
+  }
+}
+
+/**
+ * Fetches WhatsApp outbox notification logs for verified administrators.
+ */
+export async function fetchWhatsAppNotificationsAdmin(bookingId?: string): Promise<{
+  events: WhatsAppNotificationEvent[];
+  missingSchema: boolean;
+  error: string | null;
+}> {
+  if (!supabase) {
+    return { events: [], missingSchema: false, error: getMissingConfigError() };
+  }
+
+  const { data, error } = await supabase.rpc('admin_list_whatsapp_notifications', {
+    p_booking_id: bookingId ?? null,
+  });
+
+  if (error) {
+    if (isRpcMissingError(error)) {
+      return {
+        events: [],
+        missingSchema: true,
+        error:
+          'WhatsApp notification outbox tables are not deployed yet. Run supabase/migrations/step6_whatsapp_notifications.sql in Supabase SQL Editor.',
+      };
+    }
+    return {
+      events: [],
+      missingSchema: false,
+      error: formatBookingError(error, 'Could not load WhatsApp notification logs.'),
+    };
+  }
+
+  const rows = Array.isArray(data) ? (data as RawRow[]) : [];
+  return {
+    events: rows.map(mapWhatsAppNotificationRow),
+    missingSchema: false,
+    error: null,
+  };
+}
+
+/**
+ * Safely re-queues a failed notification event (blocked on server for 'sent' or 'skipped' rows)
+ * and attempts immediate dispatch via Edge Function.
+ */
+export async function retryWhatsAppNotificationAdmin(eventId: string): Promise<{
+  queued: boolean;
+  dispatch: Awaited<ReturnType<typeof triggerWhatsAppNotificationDispatch>>;
+  error: string | null;
+}> {
+  if (!supabase) {
+    return {
+      queued: false,
+      dispatch: { invoked: false, queuedOnly: true, sent: 0, failed: 0 },
+      error: getMissingConfigError(),
+    };
+  }
+
+  const { error } = await supabase.rpc('admin_retry_whatsapp_notification', {
+    p_event_id: eventId,
+  });
+
+  if (error) {
+    return {
+      queued: false,
+      dispatch: { invoked: false, queuedOnly: true, sent: 0, failed: 0 },
+      error: formatBookingError(error, 'Could not re-queue WhatsApp notification.'),
+    };
+  }
+
+  const dispatch = await triggerWhatsAppNotificationDispatch({ eventId });
+  return { queued: true, dispatch, error: null };
 }

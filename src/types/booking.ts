@@ -25,6 +25,8 @@ export interface CreateBookingInput {
   pickupType: PickupType;
   deliveryAddress?: string;
   notes?: string;
+  whatsappOptIn?: boolean;
+  contactPhone?: string;
 }
 
 export interface CreateGuestBookingInput extends CreateBookingInput {
@@ -51,6 +53,7 @@ export interface BookingRecord {
   totalAmount: number;
   status: BookingStatus;
   notes: string | null;
+  whatsappOptIn?: boolean;
   createdAt: string;
   vehicleName?: string;
   vehicleBrand?: string;
@@ -66,4 +69,36 @@ export interface AdminBookingRecord extends BookingRecord {
   customerName: string;
   customerPhone: string;
   customerEmail: string;
+}
+
+export type WhatsAppNotificationEventType =
+  | 'booking_created_admin'
+  | 'booking_confirmed_customer';
+
+export type WhatsAppNotificationStatus =
+  | 'pending'
+  | 'processing'
+  | 'sent'
+  | 'failed'
+  | 'skipped';
+
+export interface WhatsAppNotificationEvent {
+  id: string;
+  bookingId: string;
+  bookingReference: string;
+  eventType: WhatsAppNotificationEventType;
+  recipientRole: 'admin' | 'customer';
+  recipientPhone: string;
+  templateKey: string;
+  payload: Record<string, unknown>;
+  status: WhatsAppNotificationStatus;
+  skipReason: string | null;
+  attemptCount: number;
+  maxAttempts: number;
+  lastAttemptAt: string | null;
+  nextRetryAt: string | null;
+  sentAt: string | null;
+  providerMessageId: string | null;
+  lastError: string | null;
+  createdAt: string;
 }

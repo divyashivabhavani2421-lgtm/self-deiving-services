@@ -23,6 +23,7 @@ import {
   createBooking,
   createGuestBooking,
   fetchVehicleBookedSlots,
+  triggerWhatsAppNotificationDispatch,
 } from '../services/bookingsService';
 import { listVehicleImages } from '../services/storageService';
 import { fetchVehicleBySlugOrId } from '../services/vehiclesService';
@@ -111,6 +112,7 @@ export function VehicleDetailPage() {
   const [pickupType, setPickupType] = useState<PickupType>('hub_pickup');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [notes, setNotes] = useState('');
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [bookingError, setBookingError] = useState('');
@@ -414,6 +416,8 @@ export function VehicleDetailPage() {
             pickupType,
             deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
             notes: notes.trim() || undefined,
+            whatsappOptIn,
+            contactPhone: parsedPhone.e164,
           })
         : await createGuestBooking({
             vehicleId: vehicle.id,
@@ -425,6 +429,7 @@ export function VehicleDetailPage() {
             pickupType,
             deliveryAddress: pickupType === 'doorstep_delivery' ? deliveryAddress.trim() : undefined,
             notes: notes.trim() || undefined,
+            whatsappOptIn,
           });
 
       if (res.error || !res.booking) {
@@ -433,6 +438,11 @@ export function VehicleDetailPage() {
         setBookedSlots(slotsRes.slots);
         return;
       }
+
+      void triggerWhatsAppNotificationDispatch({
+        bookingId: res.booking.id,
+        eventType: 'booking_created_admin',
+      });
 
       setConfirmedBooking({
         ...res.booking,
@@ -1052,6 +1062,29 @@ export function VehicleDetailPage() {
                       placeholder="Any pickup instructions or travel plans..."
                       className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white p-2.5 text-xs text-[#0B1F3A] focus:border-[#1D4ED8] focus:outline-none"
                     />
+                  </div>
+
+                  {/* Explicit Optional WhatsApp Opt-In Consent */}
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                    <label htmlFor="whatsapp-opt-in" className="flex cursor-pointer items-start gap-2.5">
+                      <input
+                        id="whatsapp-opt-in"
+                        type="checkbox"
+                        checked={whatsappOptIn}
+                        onChange={(e) => setWhatsappOptIn(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
+                      />
+                      <span className="text-xs leading-relaxed text-[#0B1F3A]">
+                        <span className="font-semibold">
+                          Receive booking confirmation updates on WhatsApp
+                        </span>{' '}
+                        <span className="text-slate-500">(Optional)</span>
+                        <span className="mt-0.5 block text-[11px] text-slate-600">
+                          When checked, Siddipet Self Drive Cars will send a WhatsApp confirmation
+                          to your mobile number once an admin approves your booking.
+                        </span>
+                      </span>
+                    </label>
                   </div>
 
                   {/* Validation / Overlap Banner */}

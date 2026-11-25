@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import {
   fetchAllBookingsAdmin,
+  triggerWhatsAppNotificationDispatch,
   updateBookingStatusAdmin,
 } from '../../services/bookingsService';
 import { AdminBookingRecord, BookingStatus } from '../../types/booking';
@@ -107,8 +108,22 @@ export function AdminBookingsManager() {
         return;
       }
       const refLabel = booking.bookingReference || `#${booking.id.slice(0, 8).toUpperCase()}`;
+      let whatsappNote = '';
+
+      if (booking.status === 'pending' && nextStatus === 'confirmed') {
+        const dispatch = await triggerWhatsAppNotificationDispatch({
+          bookingId: booking.id,
+          eventType: 'booking_confirmed_customer',
+        });
+        if (dispatch.sent > 0) {
+          whatsappNote = ' Customer confirmation sent on WhatsApp.';
+        } else if (dispatch.queuedOnly) {
+          whatsappNote = ' WhatsApp confirmation event logged in queue.';
+        }
+      }
+
       setNotice(
-        `Booking ${refLabel} (${booking.vehicleName || 'Vehicle'}) updated to ${nextStatus}.`
+        `Booking ${refLabel} (${booking.vehicleName || 'Vehicle'}) updated to ${nextStatus}.${whatsappNote}`
       );
       await loadBookings();
     } finally {

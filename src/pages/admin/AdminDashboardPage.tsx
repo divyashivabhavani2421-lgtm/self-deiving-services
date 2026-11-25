@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
+  MessageSquare,
   Plus,
   RefreshCw,
   Search,
@@ -27,6 +28,7 @@ import { Vehicle } from '../../types/vehicle';
 import { formatINR } from '../../utils/rentalUtils';
 import { AdminBookingsManager } from '../../components/admin/AdminBookingsManager';
 import { AdminUsersManager } from '../../components/admin/AdminUsersManager';
+import { AdminWhatsAppLogs } from '../../components/admin/AdminWhatsAppLogs';
 import { VehicleForm } from '../../components/admin/VehicleForm';
 import { VehicleImagesManager } from '../../components/admin/VehicleImagesManager';
 import { VehicleImage } from '../../components/VehicleImage';
@@ -35,6 +37,7 @@ import { VehicleErrorState } from '../../components/VehicleListStates';
 type AdminSection =
   | 'overview'
   | 'bookings'
+  | 'notifications'
   | 'vehicles'
   | 'add'
   | 'edit'
@@ -46,6 +49,7 @@ type AdminSection =
 const SIDEBAR_ITEMS: { id: AdminSection; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Dashboard Overview', icon: LayoutDashboard },
   { id: 'bookings', label: 'Manage Bookings', icon: ClipboardList },
+  { id: 'notifications', label: 'WhatsApp Logs', icon: MessageSquare },
   { id: 'vehicles', label: 'Manage Vehicles', icon: CarFront },
   { id: 'add', label: 'Add Vehicle', icon: Plus },
   { id: 'images', label: 'Vehicle Images', icon: ImageIcon },
@@ -627,6 +631,9 @@ export function AdminDashboardPage() {
 
               {/* MANAGE BOOKINGS */}
               {activeSection === 'bookings' && <AdminBookingsManager />}
+
+              {/* WHATSAPP NOTIFICATION LOGS */}
+              {activeSection === 'notifications' && <AdminWhatsAppLogs />}
 
               {/* ADMINISTRATOR MANAGEMENT */}
               {activeSection === 'admins' && <AdminUsersManager />}
