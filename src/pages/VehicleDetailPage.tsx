@@ -25,7 +25,6 @@ import {
   fetchVehicleBookedSlots,
   triggerWhatsAppNotificationDispatch,
 } from '../services/bookingsService';
-import { listVehicleImages } from '../services/storageService';
 import { fetchVehicleBySlugOrId } from '../services/vehiclesService';
 import { BookedSlot, BookingRecord, PickupType, RentalDurationType } from '../types/booking';
 import { Vehicle } from '../types/vehicle';
@@ -58,7 +57,6 @@ export function VehicleDetailPage() {
   const { user, profile } = useAuth();
 
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
-  const [storageImages, setStorageImages] = useState<string[]>([]);
   const [bookedSlots, setBookedSlots] = useState<BookedSlot[]>([]);
   const [selectedImage, setSelectedImage] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -137,19 +135,13 @@ export function VehicleDetailPage() {
       setIsConfigMissing(result.isConfigMissing);
 
       if (result.vehicle) {
-        const [storageRes, slotsRes] = await Promise.all([
-          listVehicleImages(result.vehicle.id),
-          fetchVehicleBookedSlots(result.vehicle.id),
-        ]);
-        setStorageImages(storageRes.files.map((f) => f.publicUrl));
+        const slotsRes = await fetchVehicleBookedSlots(result.vehicle.id);
         setBookedSlots(slotsRes.slots);
       } else {
-        setStorageImages([]);
         setBookedSlots([]);
       }
     } catch (err) {
       setVehicle(null);
-      setStorageImages([]);
       setBookedSlots([]);
       setError(err instanceof Error ? err.message : 'Unable to load vehicle details.');
       setIsConfigMissing(false);
@@ -175,9 +167,8 @@ export function VehicleDetailPage() {
     };
     addUnique(vehicle.image);
     vehicle.images.forEach(addUnique);
-    storageImages.forEach(addUnique);
     return merged;
-  }, [vehicle, storageImages]);
+  }, [vehicle]);
 
   useEffect(() => {
     setSelectedImage(galleryImages[0] || '');

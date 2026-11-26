@@ -314,6 +314,10 @@ function buildVehiclePayload(
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
 
+  if (mode === 'create' && input.id) {
+    payload.id = input.id;
+  }
+
   if (input.make !== undefined) payload.make = input.make.trim();
   if (input.model !== undefined) payload.model = input.model.trim();
   if (input.year !== undefined) payload.year = input.year;

@@ -24,6 +24,7 @@ export interface Vehicle {
 }
 
 export interface VehicleWriteInput {
+  id?: string;
   make: string;
   model: string;
   year: number | null;

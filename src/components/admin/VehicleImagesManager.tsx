@@ -4,12 +4,12 @@ import {
   CheckCircle2,
   ImagePlus,
   Loader2,
+  Plus,
   Star,
   Trash2,
   Upload,
 } from 'lucide-react';
 import {
-  deleteVehicleImageFromStorage,
   listVehicleImages,
   uploadVehicleImages,
   UploadProgressInfo,
@@ -40,7 +40,17 @@ export function VehicleImagesManager({
   detectedColumns,
   onRefreshVehicles,
 }: VehicleImagesManagerProps) {
-  const selectedVehicle = vehicles.find((v) => v.id === selectedVehicleId) || vehicles[0] || null;
+  const baseVehicle = vehicles.find((v) => v.id === selectedVehicleId) || vehicles[0] || null;
+  const [vehicleOverride, setVehicleOverride] = useState<Vehicle | null>(null);
+
+  useEffect(() => {
+    setVehicleOverride(null);
+  }, [baseVehicle]);
+
+  const selectedVehicle =
+    vehicleOverride && baseVehicle && vehicleOverride.id === baseVehicle.id
+      ? vehicleOverride
+      : baseVehicle;
 
   const [storageFiles, setStorageFiles] = useState<VehicleStorageFile[]>([]);
   const [loadingImages, setLoadingImages] = useState(false);
@@ -174,6 +184,9 @@ export function VehicleImagesManager({
             `Uploaded ${result.uploaded.length} file(s) to storage, but could not save URL(s) to the vehicles table: ${updateRes.error}`
           );
         } else {
+          if (updateRes.vehicle) {
+            setVehicleOverride(updateRes.vehicle);
+          }
           const primarySkipped = updateRes.skippedFields.includes('Primary Image');
           const gallerySkipped = updateRes.skippedFields.includes('Vehicle Images');
           if (primarySkipped && gallerySkipped) {
@@ -211,21 +224,28 @@ export function VehicleImagesManager({
 
     try {
       const mergedGallery = Array.from(
-        new Set([imageUrl, ...(selectedVehicle.images || []), ...storageFiles.map((f) => f.publicUrl)])
+        new Set(
+          [
+            imageUrl,
+            ...(selectedVehicle.image ? [selectedVehicle.image] : []),
+            ...(selectedVehicle.images || []),
+          ].filter(Boolean)
+        )
       );
       const res = await updateVehicle(
         selectedVehicle.id,
         { image: imageUrl, images: mergedGallery },
         detectedColumns
       );
-      if (res.error) {
-        setError(res.error);
+      if (res.error || !res.vehicle) {
+        setError(res.error || 'Could not update primary image.');
         return;
       }
       if (res.skippedFields.includes('Primary Image')) {
         setError('Your vehicles table does not have a primary image column (e.g. image_url).');
         return;
       }
+      setVehicleOverride(res.vehicle);
       setNotice(`Primary photograph updated for ${selectedVehicle.name}.`);
       onRefreshVehicles();
     } finally {
@@ -233,35 +253,63 @@ export function VehicleImagesManager({
     }
   };
 
-  const handleDeleteImage = async (file: VehicleStorageFile) => {
+  const handleLinkStorageFile = async (imageUrl: string) => {
     if (!selectedVehicle) return;
+    setBusyPath(imageUrl);
     setError('');
     setNotice('');
 
-    const remainingStorage = storageFiles.filter((item) => item.path !== file.path);
-    const remainingGallery = (selectedVehicle.images || []).filter(
-      (url) => url !== file.publicUrl
-    );
-    const nextPrimary =
-      selectedVehicle.image === file.publicUrl
-        ? remainingStorage[0]?.publicUrl || remainingGallery[0] || ''
-        : selectedVehicle.image;
-
-    if (!nextPrimary) {
-      setError(
-        'A primary vehicle image is required. Upload a replacement photograph before deleting the last remaining image.'
-      );
-      return;
-    }
-
-    setBusyPath(file.path);
-
     try {
-      const delRes = await deleteVehicleImageFromStorage(file.path);
-      if (!delRes.success) {
-        setError(delRes.error || 'Could not delete image.');
+      const mergedGallery = Array.from(
+        new Set(
+          [
+            ...(selectedVehicle.image ? [selectedVehicle.image] : []),
+            ...(selectedVehicle.images || []),
+            imageUrl,
+          ].filter(Boolean)
+        )
+      );
+      const nextPrimary = selectedVehicle.image || imageUrl;
+      const res = await updateVehicle(
+        selectedVehicle.id,
+        { image: nextPrimary, images: mergedGallery },
+        detectedColumns
+      );
+      if (res.error || !res.vehicle) {
+        setError(res.error || 'Could not link storage image to vehicle.');
         return;
       }
+      setVehicleOverride(res.vehicle);
+      setNotice(`Linked storage image to ${selectedVehicle.name}.`);
+      onRefreshVehicles();
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
+  const handleRemoveImage = async (targetUrl: string) => {
+    if (!selectedVehicle) return;
+    setError('');
+    setNotice('');
+    setBusyPath(targetUrl);
+
+    try {
+      const currentLinked = Array.from(
+        new Set(
+          [
+            ...(selectedVehicle.image ? [selectedVehicle.image] : []),
+            ...(selectedVehicle.images || []),
+          ].filter(Boolean)
+        )
+      );
+
+      const remainingGallery = currentLinked.filter((url) => url !== targetUrl);
+      const isRemovingPrimary = selectedVehicle.image === targetUrl;
+      const nextPrimary = isRemovingPrimary
+        ? remainingGallery[0] || ''
+        : selectedVehicle.image && selectedVehicle.image !== targetUrl
+          ? selectedVehicle.image
+          : remainingGallery[0] || '';
 
       const updateRes = await updateVehicle(
         selectedVehicle.id,
@@ -272,14 +320,19 @@ export function VehicleImagesManager({
         detectedColumns
       );
 
-      setStorageFiles(remainingStorage);
-      if (updateRes.error) {
-        setError(
-          `Image deleted from storage, but failed to update vehicle record: ${updateRes.error}`
-        );
-      } else {
-        setNotice('Image removed from storage and vehicle record updated.');
+      if (updateRes.error || !updateRes.vehicle) {
+        setError(updateRes.error || 'Could not remove image from vehicle.');
+        return;
       }
+
+      setVehicleOverride(updateRes.vehicle);
+      setNotice(
+        remainingGallery.length === 0
+          ? `Removed the last linked image from ${selectedVehicle.name}. Placeholder is now shown (Storage files were preserved).`
+          : isRemovingPrimary
+            ? `Primary image removed from ${selectedVehicle.name}. Selected the next available image as primary.`
+            : `Image removed from ${selectedVehicle.name} (Storage file preserved).`
+      );
       onRefreshVehicles();
     } finally {
       setBusyPath(null);
@@ -293,6 +346,20 @@ export function VehicleImagesManager({
       </div>
     );
   }
+
+  const primaryUrl = selectedVehicle?.image || '';
+  const linkedUrls = Array.from(
+    new Set(
+      [...(primaryUrl ? [primaryUrl] : []), ...(selectedVehicle?.images || [])].filter(Boolean)
+    )
+  );
+  const storageUrlSet = new Set(storageFiles.map((f) => f.publicUrl));
+  const nonStoragePrimary = Boolean(primaryUrl && !storageUrlSet.has(primaryUrl));
+  const nonStorageGalleryUrls = (selectedVehicle?.images || []).filter(
+    (url) => url && url !== primaryUrl && !storageUrlSet.has(url)
+  );
+  const linkedStorageFiles = storageFiles.filter((file) => linkedUrls.includes(file.publicUrl));
+  const unlinkedStorageFiles = storageFiles.filter((file) => !linkedUrls.includes(file.publicUrl));
 
   return (
     <div className="space-y-6">
@@ -458,13 +525,14 @@ export function VehicleImagesManager({
         )}
       </div>
 
-      {/* Stored Images Gallery */}
+      {/* Linked Vehicle Photographs (Customer-Facing Source of Truth) */}
       <div className="rounded-xl border border-slate-200 bg-white p-6">
         <h3 className="font-display text-base font-bold text-[#0B1F3A]">
           Current Photographs for {selectedVehicle?.name}
         </h3>
         <p className="mt-1 text-xs text-slate-500">
-          Choose which image appears as the primary card photo on customer listings.
+          Choose which image appears as the primary card photo on customer listings, or remove unwanted images from this
+          vehicle. Removing an image unlinks it from the vehicle without deleting files from Supabase Storage.
         </p>
 
         {loadingImages ? (
@@ -473,28 +541,58 @@ export function VehicleImagesManager({
               <div key={n} className="aspect-[4/3] animate-pulse rounded-lg bg-slate-100" />
             ))}
           </div>
+        ) : linkedUrls.length === 0 ? (
+          <div className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <VehicleImage src="" alt={`${selectedVehicle?.name || 'Vehicle'} placeholder`} />
+              <div className="p-3.5">
+                <p className="text-xs font-semibold text-[#0B1F3A]">Default Placeholder Active</p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  No images are linked to this vehicle (<code className="font-mono">image_url = null</code>). Upload
+                  photographs above to display real vehicle photos to customers.
+                </p>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {/* Existing DB primary image if not from storageFiles */}
-            {selectedVehicle?.image &&
-              !storageFiles.some((f) => f.publicUrl === selectedVehicle.image) && (
-                <div className="overflow-hidden rounded-xl border border-[#1D4ED8] bg-white">
-                  <VehicleImage src={selectedVehicle.image} alt={`${selectedVehicle.name} primary`} />
-                  <div className="p-3.5">
-                    <p className="text-xs font-semibold text-[#1D4ED8]">Current Primary Listing Image</p>
-                    <p className="mt-1 truncate text-[11px] text-slate-500">{selectedVehicle.image}</p>
+            {/* 1. Current Primary Listing Image (if not already in linkedStorageFiles) */}
+            {nonStoragePrimary && (
+              <div className="overflow-hidden rounded-xl border border-[#1D4ED8] bg-white ring-1 ring-[#1D4ED8]/30">
+                <VehicleImage src={primaryUrl} alt={`${selectedVehicle?.name} primary`} />
+                <div className="p-3.5">
+                  <p className="text-xs font-semibold text-[#1D4ED8]">Current Primary Listing Image</p>
+                  <p className="mt-1 truncate text-[11px] text-slate-500">{primaryUrl}</p>
+
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#15803D]">
+                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Primary</span>
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={busyPath === primaryUrl}
+                      onClick={() => void handleRemoveImage(primaryUrl)}
+                      aria-label="Remove current primary listing image"
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {busyPath === primaryUrl ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      )}
+                      <span>Remove</span>
+                    </button>
                   </div>
                 </div>
-              )}
+              </div>
+            )}
 
-            {/* Additional DB gallery URLs if not returned by storage.list() */}
-            {(selectedVehicle?.images || [])
-              .filter(
-                (url) =>
-                  url !== selectedVehicle?.image &&
-                  !storageFiles.some((f) => f.publicUrl === url)
-              )
-              .map((galleryUrl, idx) => (
+            {/* 2. Linked Gallery Images (outside vehicle-images/<id>/ storage listing) */}
+            {nonStorageGalleryUrls.map((galleryUrl, idx) => {
+              const isBusy = busyPath === galleryUrl;
+              return (
                 <div
                   key={`${galleryUrl}-${idx}`}
                   className="overflow-hidden rounded-xl border border-slate-200 bg-white"
@@ -503,23 +601,40 @@ export function VehicleImagesManager({
                   <div className="p-3.5">
                     <p className="truncate text-xs font-medium text-[#0B1F3A]">Linked Gallery Image</p>
                     <p className="mt-0.5 truncate text-[11px] text-slate-500">{galleryUrl}</p>
-                    <div className="mt-3">
+                    <div className="mt-3 flex items-center justify-between gap-2">
                       <button
                         type="button"
-                        disabled={busyPath === galleryUrl}
+                        disabled={isBusy}
                         onClick={() => void handleSetPrimary(galleryUrl)}
                         className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#0B1F3A] transition-colors hover:border-[#1D4ED8] hover:text-[#1D4ED8] disabled:opacity-50"
                       >
                         <Star className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Set Primary</span>
                       </button>
+
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void handleRemoveImage(galleryUrl)}
+                        aria-label={`Remove linked gallery image ${idx + 1}`}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
+                      >
+                        {isBusy ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        <span>Remove</span>
+                      </button>
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+            })}
 
-            {storageFiles.map((file) => {
-              const isPrimary = selectedVehicle?.image === file.publicUrl;
+            {/* 3. Linked Supabase Storage Images */}
+            {linkedStorageFiles.map((file) => {
+              const isPrimary = primaryUrl === file.publicUrl;
               const isBusy = busyPath === file.publicUrl || busyPath === file.path;
 
               return (
@@ -532,9 +647,13 @@ export function VehicleImagesManager({
                   <VehicleImage src={file.publicUrl} alt={`${selectedVehicle?.name} uploaded`} />
                   <div className="p-3.5">
                     <p className="truncate text-xs font-medium text-[#0B1F3A]">{file.name}</p>
-                    {isPrimary && (
-                      <p className="mt-0.5 text-[11px] font-semibold text-[#1D4ED8]">Primary Listing Image</p>
-                    )}
+                    <p
+                      className={`mt-0.5 text-[11px] ${
+                        isPrimary ? 'font-semibold text-[#1D4ED8]' : 'text-slate-500'
+                      }`}
+                    >
+                      {isPrimary ? 'Primary Listing Image · Supabase Storage' : 'Supabase Storage Image'}
+                    </p>
 
                     <div className="mt-3 flex items-center justify-between gap-2">
                       {!isPrimary ? (
@@ -557,8 +676,8 @@ export function VehicleImagesManager({
                       <button
                         type="button"
                         disabled={isBusy}
-                        onClick={() => void handleDeleteImage(file)}
-                        aria-label={`Delete ${file.name}`}
+                        onClick={() => void handleRemoveImage(file.publicUrl)}
+                        aria-label={`Remove ${file.name} from vehicle`}
                         className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
                       >
                         {isBusy ? (
@@ -566,25 +685,65 @@ export function VehicleImagesManager({
                         ) : (
                           <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                         )}
-                        <span>Delete</span>
+                        <span>Remove</span>
                       </button>
                     </div>
                   </div>
                 </div>
               );
             })}
-
-            {!selectedVehicle?.image &&
-              (selectedVehicle?.images || []).length === 0 &&
-              storageFiles.length === 0 && (
-              <div className="col-span-full rounded-xl border border-slate-200 bg-slate-50 px-6 py-10 text-center text-sm text-slate-600">
-                No photographs uploaded for this vehicle yet. Use the picker above to upload images to the{' '}
-                <code className="font-mono font-semibold">vehicle-images</code> bucket.
-              </div>
-            )}
           </div>
         )}
       </div>
+
+      {/* Unlinked Storage Files (preserved in Supabase Storage, hidden from customers) */}
+      {!loadingImages && unlinkedStorageFiles.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-6">
+          <h3 className="font-display text-sm font-bold text-[#0B1F3A]">
+            Unlinked Files in Supabase Storage ({unlinkedStorageFiles.length})
+          </h3>
+          <p className="mt-1 text-xs text-slate-600">
+            These files exist in <code className="font-mono">vehicle-images/{selectedVehicle?.id}/</code> but are not
+            linked to this vehicle and are hidden from customer pages. Re-link one below if needed, or leave them for
+            manual Storage cleanup.
+          </p>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {unlinkedStorageFiles.map((file) => {
+              const isBusy = busyPath === file.publicUrl || busyPath === file.path;
+              return (
+                <div key={file.path} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <VehicleImage src={file.publicUrl} alt={`${selectedVehicle?.name} unlinked storage`} />
+                  <div className="p-3.5">
+                    <p className="truncate text-xs font-medium text-[#0B1F3A]">{file.name}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">Unlinked Storage File · Hidden from customers</p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void handleLinkStorageFile(file.publicUrl)}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#0B1F3A] transition-colors hover:border-[#1D4ED8] hover:text-[#1D4ED8] disabled:opacity-50"
+                      >
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Add to Gallery</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void handleSetPrimary(file.publicUrl)}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-[#0B1F3A] transition-colors hover:border-[#1D4ED8] hover:text-[#1D4ED8] disabled:opacity-50"
+                      >
+                        <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Set Primary</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

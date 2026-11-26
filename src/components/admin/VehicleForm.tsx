@@ -36,6 +36,17 @@ interface StagedImage {
 const FUEL_TYPES = ['Petrol', 'Diesel', 'CNG', 'Electric', 'Hybrid'];
 const TRANSMISSIONS = ['Manual', 'Automatic', 'AMT', 'CVT'];
 
+function generateVehicleUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const rand = (Math.random() * 16) | 0;
+    const value = char === 'x' ? rand : (rand & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 export function VehicleForm({
   mode,
   initialVehicle,
@@ -222,23 +233,15 @@ export function VehicleForm({
 
     try {
       const filesToUpload = stagedImages.map((s) => s.file);
+      const targetVehicleId =
+        mode === 'edit' && initialVehicle?.id ? initialVehicle.id : generateVehicleUuid();
       let newlyUploadedUrls: string[] = [];
       let newlyUploadedPaths: string[] = [];
 
-      // Upload images to `vehicle-images` FIRST so image_url is guaranteed non-null on insert
+      // Upload images to `vehicle-images/<vehicleId>/` FIRST so image_url is guaranteed non-null on insert
       if (filesToUpload.length > 0) {
         setSubmitPhase('uploading');
-        const slugSeed = `${make.trim()} ${model.trim()}`;
-        const folderPrefix =
-          mode === 'edit' && initialVehicle?.id
-            ? initialVehicle.id
-            : `vehicles/${slugSeed
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '-')
-                .replace(/^-+|-+$/g, '')
-                .slice(0, 24) || 'car'}`;
-
-        const uploadRes = await uploadVehicleImages(folderPrefix, filesToUpload, (progress) => {
+        const uploadRes = await uploadVehicleImages(targetVehicleId, filesToUpload, (progress) => {
           setUploadProgress(progress);
         });
 
@@ -263,6 +266,7 @@ export function VehicleForm({
         result = await createVehicle(
           {
             ...payload,
+            id: targetVehicleId,
             image: newlyUploadedUrls[0],
             images: newlyUploadedUrls,
           },
@@ -613,7 +617,7 @@ export function VehicleForm({
             </div>
           </div>
 
-          {mode === 'edit' && (initialVehicle?.image || (initialVehicle?.images?.length ?? 0) > 0) && (
+          {mode === 'edit' && (
             <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
               <div className="w-20 shrink-0 overflow-hidden rounded-md border border-slate-200">
                 <VehicleImage
@@ -625,7 +629,9 @@ export function VehicleForm({
               <div className="min-w-0 text-xs">
                 <p className="font-semibold text-[#0B1F3A]">Current Listing Photo</p>
                 <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                  {initialVehicle?.images.length || 1} linked photo(s). Select new photos or click Manage All Photos.
+                  {initialVehicle?.image || (initialVehicle?.images?.length ?? 0) > 0
+                    ? `${initialVehicle?.images.length || 1} linked photo(s). Select new photos or click Manage All Photos.`
+                    : 'No linked photo (placeholder shown). Select new photos or click Manage All Photos.'}
                 </p>
               </div>
             </div>
