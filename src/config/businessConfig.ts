@@ -14,7 +14,7 @@ export const BUSINESS_CONFIG = {
    * WhatsApp number 8106237490 (+91).
    */
   whatsappNumber:
-    (import.meta.env.VITE_WHATSAPP_NUMBER as string | undefined)?.trim() || '918106237490',
+    (import.meta.env.VITE_WHATSAPP_NUMBER as string | undefined)?.trim() || '916302543640',
 } as const;
 
 export function sanitizePhoneForWhatsApp(rawNumber: string): string {
