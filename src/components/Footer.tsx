@@ -104,7 +104,7 @@ export function Footer() {
                 <>
                   <li>
                     <Link to="/cars" className="transition-colors hover:text-white">
-                      Book Without Account
+                      Book a Car
                     </Link>
                   </li>
                   <li>
@@ -118,7 +118,7 @@ export function Footer() {
             <div className="pt-2">
               <WhatsAppButton
                 label={`WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
-                phoneNumber="917013647034"
+                phoneNumber="918106237490"
                 variant="primary"
                 className="w-full sm:w-auto"
               />
