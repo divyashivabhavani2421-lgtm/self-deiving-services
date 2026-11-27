@@ -767,7 +767,6 @@ export function VehicleDetailPage() {
                   <div className="flex flex-col gap-2.5">
                     <WhatsAppButton
                       label={`Contact on WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
-                      phoneNumber="918106237490"
                       message={`Hello Siddipet Self Drive Cars, I submitted a booking request (Ref: ${confirmedBooking.bookingReference || `SSDC-${confirmedBooking.id.slice(0, 8).toUpperCase()}`}) for ${confirmedBooking.vehicleName || displayName} from ${formatISTDateTime(confirmedBooking.startDate)} to ${formatISTDateTime(confirmedBooking.endDate)}. Amount: ${formatINR(confirmedBooking.totalAmount)}. Name: ${confirmedBooking.guestName || guestName}, Mobile: ${confirmedBooking.guestPhone || guestPhone}. Please confirm availability.`}
                       variant="primary"
                       className="w-full justify-center py-2.5"
@@ -1182,7 +1181,6 @@ export function VehicleDetailPage() {
 
                     <WhatsAppButton
                       label={`Inquire on WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
-                      phoneNumber="918106237490"
                       message={whatsappMessage}
                       variant="outline"
                       className="w-full justify-center py-2.5"

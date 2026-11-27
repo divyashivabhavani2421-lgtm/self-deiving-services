@@ -118,7 +118,6 @@ export function Footer() {
             <div className="pt-2">
               <WhatsAppButton
                 label={`WhatsApp (${BUSINESS_CONFIG.whatsappDisplayNumber})`}
-                phoneNumber="918106237490"
                 variant="primary"
                 className="w-full sm:w-auto"
               />
