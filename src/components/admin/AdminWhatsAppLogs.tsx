@@ -11,6 +11,7 @@ import {
 import {
   fetchWhatsAppNotificationsAdmin,
   retryWhatsAppNotificationAdmin,
+  sendWhatsAppNotificationNowAdmin,
   triggerWhatsAppNotificationDispatch,
 } from '../../services/bookingsService';
 import { WhatsAppNotificationEvent, WhatsAppNotificationStatus } from '../../types/booking';
@@ -86,7 +87,7 @@ export function AdminWhatsAppLogs() {
         );
       } else {
         setNotice(
-          `Processed queue: ${res.sent} sent, ${res.failed} failed.`
+          `Processed queue: ${res.sent} sent, ${res.failed} awaiting reply or retryable.`
         );
       }
       await loadLogs();
@@ -109,12 +110,78 @@ export function AdminWhatsAppLogs() {
         setNotice(`Retried notification for ${eventItem.bookingReference}: delivered successfully.`);
       } else if (res.dispatch.queuedOnly) {
         setNotice(
-          `Re-queued notification for ${eventItem.bookingReference}. Delivery will run once WhatsApp Cloud API is enabled.`
+          `Re-queued notification for ${eventItem.bookingReference}. Delivery will run once WHATSAPP_ENABLED is active.`
+        );
+      } else if (res.dispatch.failed > 0) {
+        setNotice(
+          `Notification for ${eventItem.bookingReference} could not send yet (check Details / Errors for sandbox_start or 24-hour window instructions).`
         );
       } else {
         setNotice(`Re-queued notification for ${eventItem.bookingReference}.`);
       }
       await loadLogs();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleSendNowEvent = async (eventItem: WhatsAppNotificationEvent) => {
+    if (eventItem.status !== 'pending') return;
+
+    setBusyId(eventItem.id);
+    setError('');
+    setNotice('');
+    try {
+      const res = await sendWhatsAppNotificationNowAdmin(
+        eventItem.bookingId,
+        eventItem.eventType
+      );
+
+      if (!res.invoked || res.error) {
+        setError(
+          res.error ||
+            res.message ||
+            `Could not invoke WhatsApp dispatch for ${eventItem.bookingReference}.`
+        );
+        return;
+      }
+
+      const itemResult =
+        res.results.find((r) => r.eventId === eventItem.id) ?? res.results[0];
+
+      await loadLogs();
+
+      if (res.queuedOnly) {
+        setNotice(
+          `${eventItem.bookingReference} status: pending. ${
+            res.message ||
+            'WhatsApp delivery is paused (`WHATSAPP_ENABLED=false`); event remains queued.'
+          }`
+        );
+      } else if (itemResult?.status === 'sent' || res.sent > 0) {
+        setNotice(
+          `${eventItem.bookingReference} status: sent.${
+            itemResult?.messageId ? ` (Message ID: ${itemResult.messageId})` : ''
+          }`
+        );
+      } else if (itemResult?.awaitingReply || res.awaitingReply > 0) {
+        setNotice(
+          `${eventItem.bookingReference} status: awaiting reply. ${
+            itemResult?.error ||
+            'Reply to the sandbox_start message on +91 6302543640, then click Retry.'
+          }`
+        );
+      } else if (itemResult?.status === 'failed' || res.failed > 0) {
+        setError(
+          `${eventItem.bookingReference} status: failed. ${
+            itemResult?.error || 'Check Details / Errors for failure details.'
+          }`
+        );
+      } else {
+        setNotice(
+          `Refreshed WhatsApp logs for ${eventItem.bookingReference} (no pending event was processed).`
+        );
+      }
     } finally {
       setBusyId(null);
     }
@@ -180,7 +247,7 @@ export function AdminWhatsAppLogs() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={dispatchingQueue || loading}
+            disabled={dispatchingQueue || loading || busyId !== null}
             onClick={() => void handleDispatchQueue()}
             className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-[#0B1F3A] px-3.5 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-50"
           >
@@ -287,7 +354,16 @@ export function AdminWhatsAppLogs() {
                         {ev.skipReason ? (
                           <span className="text-slate-600">{ev.skipReason}</span>
                         ) : ev.lastError ? (
-                          <span className="text-red-700">{ev.lastError}</span>
+                          <span
+                            className={
+                              ev.lastError.includes('sandbox_start') ||
+                              ev.lastError.includes('24-hour')
+                                ? 'text-amber-700'
+                                : 'text-red-700'
+                            }
+                          >
+                            {ev.lastError}
+                          </span>
                         ) : ev.providerMessageId ? (
                           <span className="font-mono text-[11px] text-slate-500">
                             Msg ID: {ev.providerMessageId}
@@ -307,10 +383,24 @@ export function AdminWhatsAppLogs() {
                       </td>
 
                       <td className="px-5 py-3.5 text-right">
-                        {ev.status === 'failed' ? (
+                        {ev.status === 'pending' ? (
                           <button
                             type="button"
-                            disabled={isBusy}
+                            disabled={isBusy || dispatchingQueue}
+                            onClick={() => void handleSendNowEvent(ev)}
+                            className="inline-flex h-8 items-center gap-1 rounded-md bg-[#0B1F3A] px-2.5 text-xs font-semibold text-white hover:bg-[#1D4ED8] disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {isBusy ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                            ) : (
+                              <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                            )}
+                            <span>{isBusy ? 'Sending...' : 'Send Now'}</span>
+                          </button>
+                        ) : ev.status === 'failed' ? (
+                          <button
+                            type="button"
+                            disabled={isBusy || dispatchingQueue}
                             onClick={() => void handleRetryEvent(ev)}
                             className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-semibold text-[#0B1F3A] hover:bg-slate-50 disabled:opacity-50"
                           >

@@ -562,55 +562,223 @@ function mapWhatsAppNotificationRow(row: RawRow): WhatsAppNotificationEvent {
   };
 }
 
+export interface WhatsAppDispatchItemResult {
+  eventId?: string;
+  bookingId?: string;
+  eventType?: WhatsAppNotificationEventType;
+  status?: 'sent' | 'failed';
+  awaitingReply?: boolean;
+  messageId?: string | null;
+  error?: string | null;
+}
+
+export interface WhatsAppDispatchResponse {
+  invoked: boolean;
+  queuedOnly: boolean;
+  processed: number;
+  sent: number;
+  failed: number;
+  awaitingReply: number;
+  results: WhatsAppDispatchItemResult[];
+  message?: string;
+  error?: string;
+}
+
+async function extractFunctionsErrorMessage(error: unknown): Promise<string> {
+  if (!error || typeof error !== 'object') {
+    return 'Could not reach the WhatsApp notification Edge Function.';
+  }
+
+  const errObj = error as { message?: unknown; context?: unknown };
+  const context = errObj.context;
+
+  if (context && typeof (context as Response).clone === 'function') {
+    try {
+      const resClone = (context as Response).clone();
+      const parsed = (await resClone.json()) as Record<string, unknown> | null;
+      const bodyErr = readString(parsed?.error || parsed?.message);
+      if (bodyErr) return bodyErr;
+    } catch {
+      // Ignore JSON parse failures on non-JSON error responses
+    }
+  }
+
+  return readString(errObj.message) || 'Could not reach the WhatsApp notification Edge Function.';
+}
+
 /**
  * Triggers the server-side `send-whatsapp-notifications` Supabase Edge Function.
- * Never throws or blocks booking UX if Edge Functions or Meta credentials are not yet active.
+ * Never throws or blocks booking UX if Edge Functions or provider credentials are not yet active.
  */
 export async function triggerWhatsAppNotificationDispatch(params?: {
   bookingId?: string;
   eventId?: string;
   eventType?: WhatsAppNotificationEventType;
-}): Promise<{
-  invoked: boolean;
-  queuedOnly: boolean;
-  sent: number;
-  failed: number;
-  message?: string;
-}> {
+}): Promise<WhatsAppDispatchResponse> {
   if (!supabase) {
-    return { invoked: false, queuedOnly: true, sent: 0, failed: 0 };
+    return {
+      invoked: false,
+      queuedOnly: true,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      awaitingReply: 0,
+      results: [],
+      error: getMissingConfigError(),
+    };
   }
 
   try {
+    const body: Record<string, string> = {};
+    if (params?.bookingId) body.bookingId = params.bookingId;
+    if (params?.eventId) body.eventId = params.eventId;
+    if (params?.eventType) body.eventType = params.eventType;
+
     const { data, error } = await supabase.functions.invoke('send-whatsapp-notifications', {
-      body: {
-        bookingId: params?.bookingId,
-        eventId: params?.eventId,
-        eventType: params?.eventType,
-      },
+      body,
     });
 
-    if (error || !data || typeof data !== 'object') {
+    if (error) {
+      const errMessage = await extractFunctionsErrorMessage(error);
       return {
         invoked: false,
         queuedOnly: true,
+        processed: 0,
         sent: 0,
         failed: 0,
-        message: error?.message,
+        awaitingReply: 0,
+        results: [],
+        message: errMessage,
+        error: errMessage,
+      };
+    }
+
+    if (!data || typeof data !== 'object') {
+      const errMessage = 'Unexpected empty response from send-whatsapp-notifications.';
+      return {
+        invoked: false,
+        queuedOnly: true,
+        processed: 0,
+        sent: 0,
+        failed: 0,
+        awaitingReply: 0,
+        results: [],
+        message: errMessage,
+        error: errMessage,
       };
     }
 
     const resObj = data as Record<string, unknown>;
+    if (resObj.ok === false) {
+      const errMessage = readString(resObj.error || resObj.message, 'Notification dispatch failed.');
+      return {
+        invoked: false,
+        queuedOnly: false,
+        processed: readNumber(resObj.processed, 0),
+        sent: readNumber(resObj.sent, 0),
+        failed: readNumber(resObj.failed, 0),
+        awaitingReply: readNumber(resObj.awaitingReply, 0),
+        results: [],
+        message: errMessage,
+        error: errMessage,
+      };
+    }
+
+    const rawResults = Array.isArray(resObj.results) ? (resObj.results as RawRow[]) : [];
+    const results: WhatsAppDispatchItemResult[] = rawResults.map((item) => ({
+      eventId: readString(item.eventId) || undefined,
+      bookingId: readString(item.bookingId) || undefined,
+      eventType: item.eventType ? normalizeWhatsAppEventType(item.eventType) : undefined,
+      status: item.status === 'sent' ? 'sent' : item.status === 'failed' ? 'failed' : undefined,
+      awaitingReply: readBoolean(item.awaitingReply, false),
+      messageId: readString(item.messageId) || null,
+      error: readString(item.error) || null,
+    }));
+
+    const awaitingReply =
+      readNumber(resObj.awaitingReply, 0) ||
+      results.filter((r) => Boolean(r.awaitingReply)).length;
+
     return {
       invoked: true,
       queuedOnly: Boolean(resObj.queuedOnly),
+      processed: readNumber(resObj.processed, results.length),
       sent: readNumber(resObj.sent, 0),
       failed: readNumber(resObj.failed, 0),
+      awaitingReply,
+      results,
       message: readString(resObj.message) || undefined,
     };
-  } catch {
-    return { invoked: false, queuedOnly: true, sent: 0, failed: 0 };
+  } catch (err) {
+    const errMessage =
+      err instanceof Error ? err.message : 'Unexpected error invoking WhatsApp notification dispatch.';
+    return {
+      invoked: false,
+      queuedOnly: true,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      awaitingReply: 0,
+      results: [],
+      message: errMessage,
+      error: errMessage,
+    };
   }
+}
+
+/**
+ * Dispatches a single scoped pending notification using the active authenticated admin session.
+ * Processes only the specified `bookingId` + `eventType` (never an unscoped batch).
+ */
+export async function sendWhatsAppNotificationNowAdmin(
+  bookingId: string,
+  eventType: WhatsAppNotificationEventType
+): Promise<WhatsAppDispatchResponse> {
+  if (!supabase) {
+    return {
+      invoked: false,
+      queuedOnly: true,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      awaitingReply: 0,
+      results: [],
+      error: getMissingConfigError(),
+    };
+  }
+
+  const cleanBookingId = bookingId.trim();
+  if (!cleanBookingId) {
+    return {
+      invoked: false,
+      queuedOnly: false,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      awaitingReply: 0,
+      results: [],
+      error: 'Missing booking ID for this notification.',
+    };
+  }
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError || !sessionData.session?.access_token) {
+    return {
+      invoked: false,
+      queuedOnly: false,
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      awaitingReply: 0,
+      results: [],
+      error: 'Admin session expired or missing. Please sign in again.',
+    };
+  }
+
+  return triggerWhatsAppNotificationDispatch({
+    bookingId: cleanBookingId,
+    eventType,
+  });
 }
 
 /**
@@ -665,7 +833,15 @@ export async function retryWhatsAppNotificationAdmin(eventId: string): Promise<{
   if (!supabase) {
     return {
       queued: false,
-      dispatch: { invoked: false, queuedOnly: true, sent: 0, failed: 0 },
+      dispatch: {
+        invoked: false,
+        queuedOnly: true,
+        processed: 0,
+        sent: 0,
+        failed: 0,
+        awaitingReply: 0,
+        results: [],
+      },
       error: getMissingConfigError(),
     };
   }
@@ -677,7 +853,15 @@ export async function retryWhatsAppNotificationAdmin(eventId: string): Promise<{
   if (error) {
     return {
       queued: false,
-      dispatch: { invoked: false, queuedOnly: true, sent: 0, failed: 0 },
+      dispatch: {
+        invoked: false,
+        queuedOnly: true,
+        processed: 0,
+        sent: 0,
+        failed: 0,
+        awaitingReply: 0,
+        results: [],
+      },
       error: formatBookingError(error, 'Could not re-queue WhatsApp notification.'),
     };
   }
